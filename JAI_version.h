@@ -10,6 +10,9 @@
                 - DIPスイッチ非搭載基板対応 (ENABLE_DIP_SWITCH マクロ追加)
                 - SIMMODE=0 設定時の MODE 1 (FIXモード) への自動フォールバックとログ出力対応
                 - decodeConfigSetting / LTE_SET コマンド解析および SIMMODE 変更時のモデム再設定シーケンスの対応
+                - モデムコマンド応答失敗・プロンプトタイムアウト時のESCキャンセルおよび切断ステート(DISCONNECTED)更新処理の追加
+                - 切断検知時のネットワーク再接続リトライおよびリトライ超過時の自動再起動(cbx_restart)機能の追加 (COCOBOX FWと同等化)
+                - 切断・復帰時の LedController() 呼び出しを追加 (切断時のオレンジLED高速点滅対応)
 
         - ver1.10a 2026/04/14
                 - MQTT化

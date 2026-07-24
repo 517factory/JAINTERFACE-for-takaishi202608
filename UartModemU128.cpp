@@ -1180,8 +1180,9 @@ MODEM_RESULT UartModemU128::chkMqtt_internal()
     if (queryU128("AT+SMSTATE?", 10000) != MODEM_RESULT::M_OK)
     {
         // ATコマンドの送信自体が失敗した場合、接続状態の確認ができていないため、
-        // 今回の呼び出しは失敗としてfalseを返す
+        // 今回の呼び出しは失敗としてfalseを返し、ステートをDISCONNECTEDに更新する
         modemLog(ModemLogLevel::ERR, "Failed to send AT+SMSTATE? command. Cannot verify state.");
+        mState.mqttConnectType = MqttConnectType::DISCONNECTED;
         return MODEM_RESULT::M_SEND_FAIL;
     }
 
@@ -2054,10 +2055,21 @@ bool UartModemU128::sendFsMessage(const String &message)
     serializeJson(doc, plainPayload); // JSON文字列に変換
     size_t payloadLength = plainPayload.length();
 
+    // 0. MQTT接続チェック
+    if (mState.mqttConnectType != MqttConnectType::CONNECTED &&
+        mState.mqttConnectType != MqttConnectType::CONNECTED_SP)
+    {
+        modemLog(ModemLogLevel::ERR, "Cannot send FS-Message: MQTT is not connected (State: %d)", (int)mState.mqttConnectType);
+        return false;
+    }
+
     // AT+SMPUB コマンド文字列を構築
     String smpubCommand = "AT+SMPUB=\"BIoT/up\"," + String(payloadLength) + ",1,1";
 
     modemLog(ModemLogLevel::MDBG3, "DBG>> : [%s]", smpubCommand.c_str());
+
+    // プロンプトフラグを初期化
+    mState.commandInputMode = false;
 
     // AT+SMPUB コマンドの送信
     sendAtCommand(smpubCommand.c_str());
@@ -2072,14 +2084,38 @@ bool UartModemU128::sendFsMessage(const String &message)
             mState.commandInputMode = false; // 次のためにフラグをリセット
             break;
         }
-        else if (counter > 300)
+        else if (mState.mqttConnectType != MqttConnectType::CONNECTED &&
+                 mState.mqttConnectType != MqttConnectType::CONNECTED_SP)
+        {
+            modemLog(ModemLogLevel::ERR, "MQTT disconnected while waiting for command prompt (>).");
+            _uart->write(0x1B);
+            vTaskDelay(pdMS_TO_TICKS(50));
+            while (_uart->available() > 0) { _uart->read(); }
+            if (_rawReceiveQueue) { xQueueReset(_rawReceiveQueue); }
+            return false;
+        }
+        else if (mState.atResult == MODEM_RESULT::M_ERROR)
+        {
+            modemLog(ModemLogLevel::ERR, "AT+SMPUB returned ERROR while waiting for prompt (>).");
+            _uart->write(0x1B);
+            vTaskDelay(pdMS_TO_TICKS(50));
+            while (_uart->available() > 0) { _uart->read(); }
+            if (_rawReceiveQueue) { xQueueReset(_rawReceiveQueue); }
+            mState.mqttConnectType = MqttConnectType::DISCONNECTED;
+            return false;
+        }
+        else if (counter > 50) // 5秒 (50 * 100ms)
         {
             modemLog(ModemLogLevel::ERR, "Timeout waiting for command prompt (>).");
+            _uart->write(0x1B); // ESC送信でプロンプト入力状態をキャンセル
+            vTaskDelay(pdMS_TO_TICKS(100));
+            while (_uart->available() > 0) { _uart->read(); }
+            if (_rawReceiveQueue) { xQueueReset(_rawReceiveQueue); }
+            mState.mqttConnectType = MqttConnectType::DISCONNECTED;
             return false;
         }
         else
         {
-            // modemLog(ModemLogLevel::DBG, "U128 : WAITING COMMAND PROMPT[%d]", counter);
             vTaskDelay(pdMS_TO_TICKS(100));
             counter++;
         }
@@ -2088,7 +2124,8 @@ bool UartModemU128::sendFsMessage(const String &message)
     // ペイロードデータ本体の送信
     if (queryU128(plainPayload, 10000) != MODEM_RESULT::M_OK)
     {
-        modemLog(ModemLogLevel::ERR, "Failed to Send FS-Message."); // ERRORになったときの再処理　TODO
+        modemLog(ModemLogLevel::ERR, "Failed to Send FS-Message.");
+        mState.mqttConnectType = MqttConnectType::DISCONNECTED;
         return false;
     }
 

@@ -206,12 +206,28 @@ bool mqttConnectHandler(MqttConnectType ms) {
   switch (ms) {
   case MqttConnectType::DISCONNECTED: {
     if (JAIState.isModemReady) {
+      if (modem->wasPdpResetPerformed()) {
+        SendDataLogMsg("PDP DISCONNECTED.");
+      }
       SendDataLogMsg("MQTT DISCONNECTED.");
     }
     cbx3_log(LOG_ERR, "MODEM DISCONNECTED. TRY MQTT CONNECTION.");
     JAIState.isModemReady = false;
-    // Note: Reconnection is usually handled by the monitor task or next
-    // periodic check
+    LedController(); // LEDを更新（オレンジLED高速点滅）
+
+    uint32_t retryDelayMs = 5000; // 5秒からスタート
+    int retryCount = 0;
+    while (!modem->connectNetwork()) {
+      retryCount++;
+      cbx3_log(LOG_WAR, "RETRY NETWORK CONNECTION (%d/%d) (Interval: %u ms)", retryCount, MAX_NET_RETRY_COUNT, retryDelayMs);
+      if (retryCount >= MAX_NET_RETRY_COUNT) {
+        cbx3_log(LOG_ERR, "MAX NETWORK RETRY (%d) EXCEEDED. TRIGGERING RESTART FOR NET_CONNECT_FAIL.", MAX_NET_RETRY_COUNT);
+        cbx_restart(BootReason::NET_CONNECT_FAIL);
+        return false;
+      }
+      vTaskDelay(pdMS_TO_TICKS(retryDelayMs)); // バックオフ待機
+      retryDelayMs = (retryDelayMs * 2 > 60000) ? 60000 : retryDelayMs * 2; // 最大60秒
+    }
     return false;
   }
   case MqttConnectType::CONNECTED:
@@ -222,6 +238,7 @@ bool mqttConnectHandler(MqttConnectType ms) {
       modem->resisterMqttSub();
     }
     JAIState.isModemReady = true;
+    LedController(); // LEDを更新
     return true;
   }
   default:
