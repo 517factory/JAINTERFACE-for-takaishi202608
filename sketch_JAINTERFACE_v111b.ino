@@ -38,6 +38,7 @@ void timecodeUpdateTask(void *pvParameters);
 void JASW_Callback(SwitchEvent event, int pin);
 void controlCocoboxCallback(CocoBoxControlCode command);
 bool checkModemStatus();
+bool checkSimStatus();
 void stop();
 void resetJASwitches();
 String EncodeJASwitches();
@@ -351,6 +352,11 @@ void controlCocoboxCallback(CocoBoxControlCode command) {
   case CocoBoxControlCode::LTE_MODEMSTATE: // MODEM状態の確認
     cbx3_log(LOG_INF, "Received command: LTE_MODEMSTATE");
     checkModemStatus();
+    break;
+
+  case CocoBoxControlCode::LTE_SIMSTATE: // SIM/キャリア状態の確認
+    cbx3_log(LOG_INF, "Received command: LTE_SIMSTATE");
+    checkSimStatus();
     break;
 
   case CocoBoxControlCode::LTE_RESET:
@@ -1284,6 +1290,34 @@ bool checkModemStatus() {
     } else {
       cbx3_log(LOG_WAR,
                "COULD NOT TAKE MODEM SEMAPHORE(checkModemStatus) RETRY...");
+      counter++;
+      cbx_wait(1000);
+    }
+  }
+}
+
+// SIM・キャリアのステータスチェックとログ送信
+bool checkSimStatus() {
+  int counter = 0;
+  while (true) {
+    if (modem) {
+      String info = modem->getSimStateInformation();
+      if (info.length() > 0) {
+        cbx3_log(LOG_INF, "SIM STATE : %s", info.c_str());
+        SendDataLogMsg(info.c_str());
+        return true;
+      } else {
+        cbx3_log(LOG_WAR, "CHECK SIM STATUS : Data is empty.");
+        SendDataLogMsg("ERROR : COULD NOT GET SIM STATUS.");
+        return false;
+      }
+    } else if (counter > 20) {
+      cbx3_log(LOG_ERR, "checkSimStatus : TIMEOUT");
+      SendDataLogMsg("ERROR : COULD NOT GET SIM STATUS.");
+      return false;
+    } else {
+      cbx3_log(LOG_WAR,
+               "COULD NOT TAKE MODEM SEMAPHORE(checkSimStatus) RETRY...");
       counter++;
       cbx_wait(1000);
     }

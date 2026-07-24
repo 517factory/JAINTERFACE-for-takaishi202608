@@ -208,6 +208,10 @@ std::vector<CocoBoxControlCommands> DataCommESP32::ChkRcvData(const char *buff)
         {
             results.push_back(CocoBoxControlCommands{LTE_MODEMSTATE, lines[i]});
         }
+        else if (lines[i].indexOf(RCV_COMMAND_SIMSTATE) != -1)
+        {
+            results.push_back(CocoBoxControlCommands{LTE_SIMSTATE, lines[i]});
+        }
         else if (lines[i].indexOf(RCV_COMMAND_RESET) != -1)
         {
             results.push_back(CocoBoxControlCommands{LTE_RESET, lines[i]});
