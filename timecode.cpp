@@ -19,6 +19,7 @@ TimeCode::TimeCode(void) : startMillis(0)
     currentTime = initialTime;
 }
 
+//+CCLKのアンサーからシステム時刻を設定
 bool TimeCode::setLteTimeCode(const char *buff)
 {
     // バッファから文字列を作成し、トリム
@@ -31,7 +32,7 @@ bool TimeCode::setLteTimeCode(const char *buff)
     int startIdx = buffStr.indexOf("+CCLK: ");
     if (startIdx == -1)
     {
-        cbx3_log(LOG_INF, "Time code format error in buffer: %s", buff);
+        cbx3_log(LOG_ERR, "Time code format error in buffer: %s", buff);
         return false;
     }
 
@@ -63,7 +64,8 @@ bool TimeCode::setLteTimeCode(const char *buff)
         // 前回の時刻から計算された現在時刻を秒単位で計算
         int calculatedCurrentTimeInSeconds = currentTime.hour * 3600 + currentTime.minute * 60 + currentTime.second;
         // 新しいタイムコードの時刻を秒単位で計算
-        int newTimeCodeInSeconds = hour * 3600 + minute * 60 + second + timezone * 15 * 60;
+        // int newTimeCodeInSeconds = hour * 3600 + minute * 60 + second + timezone * 15 * 60;
+        int newTimeCodeInSeconds = hour * 3600 + minute * 60 + second;
         // 差分を計算
         timeDifference = newTimeCodeInSeconds - calculatedCurrentTimeInSeconds;
 
@@ -71,10 +73,10 @@ bool TimeCode::setLteTimeCode(const char *buff)
         cbx3_log(LOG_INF, "UPDATE TIMECODE(LTE TIME) : Timer Difference: %d seconds", timeDifference);
     }
 
-    if (year != 80) // LTEがひろえていないとYEARが80になる
+    if (year != 80) // GPSがひろえていないとYEARが80になる
     {
-        // cbx3_log(LOG_WAR, "LTE time Received.");
-        initialTime.year = year;
+        // cbx3_log(LOG_WAR, "GPS time Received.");
+        initialTime.year = year < 100 ? year + 2000 : year;
         initialTime.month = month;
         initialTime.day = day;
         initialTime.hour = hour;
@@ -83,7 +85,8 @@ bool TimeCode::setLteTimeCode(const char *buff)
         initialTime.timezone = timezone;
 
         // タイムゾーンを考慮して時刻を補正
-        int totalMinutes = (initialTime.hour * 60 + initialTime.minute) + (initialTime.timezone * 15);
+        // int totalMinutes = (initialTime.hour * 60 + initialTime.minute) + (initialTime.timezone * 15);
+        int totalMinutes = (initialTime.hour * 60 + initialTime.minute);
         initialTime.hour = (totalMinutes / 60) % 24;
         initialTime.minute = totalMinutes % 60;
 
@@ -93,7 +96,7 @@ bool TimeCode::setLteTimeCode(const char *buff)
         timeMode = LTE_TIME;
 
         cbx3_log(LOG_INF, "SET TIME CODE(LTE TIME) : %02d/%02d/%02d,%02d:%02d:%02d+%02d",
-                 initialTime.year, initialTime.month, initialTime.day,
+                 initialTime.year % 100, initialTime.month, initialTime.day,
                  initialTime.hour, initialTime.minute, initialTime.second,
                  initialTime.timezone);
     }
@@ -198,18 +201,48 @@ void TimeCode::updateTime()
     if (elapsedTime > 0)
     {
         startMillis += elapsedTime * 1000;
-        currentTime.second += elapsedTime;
-        if (currentTime.second >= 60)
+        if (currentTime.year > 0)
         {
-            currentTime.minute += currentTime.second / 60;
-            currentTime.second %= 60;
-            if (currentTime.minute >= 60)
+            struct tm timeinfo;
+            memset(&timeinfo, 0, sizeof(timeinfo));
+            
+            int fullYear = currentTime.year;
+            if (fullYear < 100)
             {
-                currentTime.hour += currentTime.minute / 60;
-                currentTime.minute %= 60;
-                if (currentTime.hour >= 24)
+                fullYear += 2000;
+            }
+            timeinfo.tm_year = fullYear - 1900;
+            timeinfo.tm_mon = currentTime.month - 1; // 0-based
+            timeinfo.tm_mday = currentTime.day;
+            timeinfo.tm_hour = currentTime.hour;
+            timeinfo.tm_min = currentTime.minute;
+            timeinfo.tm_sec = currentTime.second + elapsedTime;
+            timeinfo.tm_isdst = -1;
+            
+            mktime(&timeinfo);
+            
+            currentTime.year = timeinfo.tm_year + 1900;
+            currentTime.month = timeinfo.tm_mon + 1;
+            currentTime.day = timeinfo.tm_mday;
+            currentTime.hour = timeinfo.tm_hour;
+            currentTime.minute = timeinfo.tm_min;
+            currentTime.second = timeinfo.tm_sec;
+        }
+        else
+        {
+            currentTime.second += elapsedTime;
+            if (currentTime.second >= 60)
+            {
+                currentTime.minute += currentTime.second / 60;
+                currentTime.second %= 60;
+                if (currentTime.minute >= 60)
                 {
-                    currentTime.hour %= 24;
+                    currentTime.hour += currentTime.minute / 60;
+                    currentTime.minute %= 60;
+                    if (currentTime.hour >= 24)
+                    {
+                        currentTime.hour %= 24;
+                    }
                 }
             }
         }
@@ -222,9 +255,9 @@ String TimeCode::getTimeCode()
 
     char timeString[11]; // 'R' or 'T' + HHMMSS の形式の文字列（終端のNULL文字を含む）
     char timemodeString;
-    if (timeMode == SERVER_TIME || timeMode == LTE_TIME)
+    if (timeMode == LTE_TIME)
     {
-        timemodeString = 'S';
+        timemodeString = LTE_TIME_STR;
     }
     else
     {

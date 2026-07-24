@@ -2,19 +2,20 @@
 
 typedef enum // タスク優先度の列挙
 {
-    ASYNC_TASK_PRIORITY = 18,
-    COMM_TASK_PRIORITY_RCV = 15, // 受信タスク
-    COMM_TASK_PRIORITY_SND = 14, // 送信タスク
-    CBX3CONTROL_PRIORITY = 13,   // コントロールタスク
-    JARECEIVE_PRIORITY = 12,     // JA受信キュー用
-    I2C_PRIORITY = 10,           // I2Cタスク
-    WIFI_PRIORITY = 9,           // WIFIメッセージ受信タスク
-    EQ_PRIORITY = 8,             // EQ検知タスク
-    TC_PRIORITY = 7,             // Timdecode受信タスク
-    SWITCH_PRIORITY = 5,         // SWITCH監視
-    LED_PRIORITY = 4,            // LED制御
-    StartUpAMT5102_PRIORITY = 3, // StartUpAMT5102タスク
-    StartUpMain_PRIORITY = 2     // StartUpMainタスク
+    // ASYNC_TASK_PRIORITY = 20,
+    COMM_TASK_PRIORITY_RCV = 20,           // 受信タスク
+    COMM_TASK_PRIORITY_MODEM_MONITOR = 16, // 受信タスク
+    QUE_HANDLER_TASK_PRIORITY = 15,        // 受信データの処理タスク
+    CBX3CONTROL_PRIORITY = 14,             // コントロールタスク
+    COMM_TASK_PRIORITY_SND = 13,           // 送信タスク
+    I2C_PRIORITY = 10,                     // I2Cタスク
+    WIFI_PRIORITY = 9,                     // WIFIメッセージ受信タスク
+    EQTASK_PRIORITY = 8,                   // EQ検知タスク
+    TC_PRIORITY = 7,                       // Timdecode受信タスク
+    SWITCH_PRIORITY = 5,                   // SWITCH監視
+    LED_PRIORITY = 4,                      // LED制御
+    NETWORK_MONITOR_PRIORITY = 3,          // ネットワークの監視
+    SERIALCMD_PRIORITY = 2,                // SerialCommand タスク（低優先度）
 } task_priority_t;
 
 /*コア選択

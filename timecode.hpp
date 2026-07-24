@@ -12,8 +12,9 @@
 #include <CRCx.h>
 #include <time.h>
 
-#define SERVER_TIME_STR 'S'
-#define LTE_TIME_STR 'S'
+// #define SERVER_TIME_STR 'S'
+// #define GPS_TIME_STR 'G'
+#define LTE_TIME_STR 'L'
 #define ELPS_TIME_STR 'E'
 
 // タイムゾーンのオフセット（秒単位）

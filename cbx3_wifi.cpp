@@ -5,13 +5,12 @@
  * */
 #include "cbx3_wifi.h"
 
-cbxWiFi::cbxWiFi() : server(80)
+cbxWiFi::cbxWiFi(fs::FS &fs_instance) : server(80), filesystem(fs_instance)
 {
-  initSPIFS();
-  wifiRcvd =
-      new char[MAX_WIFI_RCVD_LENGTH];
+  wifiRcvd = new char[MAX_WIFI_RCVD_LENGTH];
   rcvdFlg = false;
   strcpy(wifiRcvd, "NODATA");
+  serverActive = false;
 }
 
 cbxWiFi::~cbxWiFi()
@@ -56,13 +55,13 @@ void cbxWiFi::startServer()
   if (!serverActive)
   {
     server.on("/", HTTP_GET, [this]()
-              { handleStaticFile("/index.html", "text/html"); });
+              { this->handleStaticFile("/index.html", "text/html"); });
     server.on("/style.css", HTTP_GET, [this]()
-              { handleStaticFile("/style.css", "text/css"); });
+              { this->handleStaticFile("/style.css", "text/css"); });
     server.on("/control", HTTP_GET, [this]()
-              { handleStaticFile("/control.html", "text/html"); });
+              { this->handleStaticFile("/control.html", "text/html"); });
     server.on("/form", HTTP_GET, [this]()
-              { handleStaticFile("/form.html", "text/html"); });
+              { this->handleStaticFile("/form.html", "text/html"); });
 
     // 変数値をJSONで返すエンドポイント
     server.on("/status.json", [this]()
@@ -77,7 +76,7 @@ void cbxWiFi::startServer()
               });
 
     server.on("/submit", HTTP_POST, [this]()
-              { cbxWiFi::handleSubmit(); });
+              { this->handleSubmit(); });
 
     // 施錠EndPoint
     server.on("/lock", HTTP_POST, [this]()
@@ -134,15 +133,6 @@ void cbxWiFi::stopMDNS()
 {
   MDNS.end(); // mDNSを停止する
   cbx3_log(LOG_INF, "mDNS responder stopped");
-}
-
-void cbxWiFi::initSPIFS()
-{
-  if (!SPIFFS.begin(true))
-  {
-    cbx3_log(LOG_ERR, "An error occurred while mounting SPIFFS");
-    return;
-  }
 }
 
 bool cbxWiFi::isConnected()
@@ -226,9 +216,9 @@ void cbxWiFi::setUnlockCallback(LockCallback unlockCallback)
   onUnlock = unlockCallback;
 }
 
-bool cbxWiFi::sendSPIFFSFile(const char *path, const char *contentType)
+bool cbxWiFi::sendLittleFSFile(const char *path, const char *contentType)
 {
-  File file = SPIFFS.open(path, "r"); // SPIFFSからファイルを開く
+  File file = LittleFS.open(path, "r"); // LittleFSからファイルを開く
   if (!file)
   {
     cbx3_log(LOG_ERR, "File not found: %s", path);    // エラーログ出力
@@ -252,7 +242,7 @@ void cbxWiFi::sendJsonResponse(int code, const char *status, const char *message
 
 void cbxWiFi::handleStaticFile(const char *path, const char *contentType)
 {
-  if (!sendSPIFFSFile(path, contentType))
+  if (!sendLittleFSFile(path, contentType))
   {
     cbx3_log(LOG_WAR, "Failed to send static file: %s", path); // 警告ログに変更
   }

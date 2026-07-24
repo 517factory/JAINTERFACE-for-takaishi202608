@@ -4,6 +4,9 @@ M5Stack U128制御用クラス
 517Factory
 */
 #include "UartModemU128.hpp"
+#include "ConfigManager.hpp"
+
+extern ConfigManager *CocoboxConfigManager;
 
 // UartModemU128 のコンストラクタ定義
 UartModemU128::UartModemU128(HardwareSerial *uart, uint16_t sendQueueLength) : BaseUartModem(uart, sendQueueLength)
@@ -71,6 +74,12 @@ bool UartModemU128::init_internal()
         return false;
     }
 
+    // 再起動検知用のフラグをここでクリアして、再帰呼び出しを防ぎつつ次の再起動に備える
+    mState.isU128RDY = false;
+    mState.isFullFunction = false;
+    mState.isSimState = false;
+    mState.isSMSready = false;
+
     // ここから初期設定
     modemLog(ModemLogLevel::INF, "U128 : Starting Connect Sequence (LTE Cat-M1 Network.)");
 
@@ -137,13 +146,24 @@ bool UartModemU128::init_internal()
 
     // 接続確認
     int counter = 0;
+    int maxTimeoutSec = 40;
+    int currentSimMode = 0;
+    if (CocoboxConfigManager != nullptr)
+    {
+        currentSimMode = CocoboxConfigManager->getValueByAccessKey("SIMMODE");
+    }
+    if (currentSimMode == 3)
+    {
+        maxTimeoutSec = 120; // 完全自動モード(SIMMODE=3)時は全キャリアスキャン用に最大120秒待機
+    }
+
     while (!chkLteConnection())
     {
         modemLog(ModemLogLevel::INF, "U128 : Check LTE Connection...");
         vTaskDelay(pdMS_TO_TICKS(1000));
         counter++;
 
-        if (counter > 40)
+        if (counter > maxTimeoutSec)
         {
             modemLog(ModemLogLevel::ERR, "U128 : LTE Connection TIMEOUT.(CEREG STATE)");
             return false;
@@ -203,6 +223,10 @@ bool UartModemU128::init_internal()
     }
 
     // ここからMQTTの接続
+    // 事前に既存のMQTTセッションがあれば切断し、ソケット状態をリセットする
+    queryU128("AT+SMDISC", DEFAULT_TIMEOUT);
+    vTaskDelay(pdMS_TO_TICKS(500));
+
     // 1回、CLEANSS=1で接続し、セッションをクリアする
     // そのあとCLEANSS=0で接続しなおすことで、セッション継続を実現する
     modemLog(ModemLogLevel::INF, "U128 : TRYING MQTT CONNECTION.");
@@ -353,15 +377,17 @@ bool UartModemU128::InitialModemSetup_internal()
     }
 
     modemLog(ModemLogLevel::INF, "U128 : DEFINE PDP CONTEXT.");
-    // if (queryU128("AT+CGDCONT=1,\"IP\",\"soracom.io\"", DEFAULT_TIMEOUT) != MODEM_RESULT::M_OK)
+    // CNACT=0,1 (Slot 0) と CNACT=1,1 (Slot 1) の両方に対応するため CID 0 と CID 1 の両方に APN を設定
+    queryU128("AT+CGDCONT=0,\"IP\",\"" GPRS_APN "\"", DEFAULT_TIMEOUT);
     if (queryU128("AT+CGDCONT=1,\"IP\",\"" GPRS_APN "\"", DEFAULT_TIMEOUT) != MODEM_RESULT::M_OK)
     {
-        modemLog(ModemLogLevel::ERR, "U128 : Failed to set PDP context.(AT+CDGCONT).");
+        modemLog(ModemLogLevel::ERR, "U128 : Failed to set PDP context.(AT+CGDCONT).");
         return false;
     }
 
     modemLog(ModemLogLevel::INF, "U128 : SET AUTH.");
-    // if (queryU128("AT+CGAUTH =1,1, \"sora\", \"sora\"", DEFAULT_TIMEOUT) != MODEM_RESULT::M_OK)
+    // CID 0 と CID 1 の両方に認証情報を設定
+    queryU128("AT+CGAUTH=0,1,\"" GPRS_USER "\",\"" GPRS_PASS "\"", DEFAULT_TIMEOUT);
     if (queryU128("AT+CGAUTH=1,1,\"" GPRS_USER "\",\"" GPRS_PASS "\"", DEFAULT_TIMEOUT) != MODEM_RESULT::M_OK)
     {
         modemLog(ModemLogLevel::ERR, "U128 : Failed to set Authentication for PDP.(AT+CGAUTH).");
@@ -371,6 +397,30 @@ bool UartModemU128::InitialModemSetup_internal()
     if (!setupCarrierBasedOnSim())
     {
         return false;
+    }
+
+    // キャリア設定(AT+COPS)後、LTEアタッチ(CEREG=1 or 5)が完了するまで待機する
+    int setupLteCounter = 0;
+    int setupMaxTimeoutSec = 40;
+    int setupSimMode = 0;
+    if (CocoboxConfigManager != nullptr)
+    {
+        setupSimMode = CocoboxConfigManager->getValueByAccessKey("SIMMODE");
+    }
+    if (setupSimMode == 3)
+    {
+        setupMaxTimeoutSec = 120; // 完全自動モード(SIMMODE=3)時は全キャリアスキャン用に最大120秒待機
+    }
+
+    while (!chkLteConnection())
+    {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        setupLteCounter++;
+        if (setupLteCounter >= setupMaxTimeoutSec)
+        {
+            modemLog(ModemLogLevel::ERR, "U128 : LTE Connection TIMEOUT during Modem Setup.");
+            return false;
+        }
     }
 
     modemLog(ModemLogLevel::INF, "U128 : Activate PDP Connection.");
@@ -402,11 +452,28 @@ bool UartModemU128::InitialModemSetup_internal()
 
 bool UartModemU128::setupCarrierBasedOnSim()
 {
-    modemLog(ModemLogLevel::INF, "U128 : Set Carrier.)");
+    modemLog(ModemLogLevel::INF, "U128 : Set Carrier.");
+    // 旧接続のMQTTセッションを事前に切断・クリーンアップ
+    queryU128("AT+SMDISC", DEFAULT_TIMEOUT);
+
+    // キャリア設定変更時は接続フラグをクリアし、フライング送信を防いで安全な順番で再接続させる
+    this->isLteConnected = false;
+    this->isPdpConnected = false;
+    mState.isPdpConnection = false;
+    mState.mqttConnectType = MqttConnectType::UNKNOWN;
     if (mState.simCarrier == SimCarrier::DOCOMO)
     {
         modemLog(ModemLogLevel::INF, "U128 : DOCOMO SIM DETECTED.");
         if (!setCarrier(LteCarrier::DOCOMO))
+        {
+            modemLog(ModemLogLevel::ERR, "U128 : Failed to Set Carrier.");
+            return false;
+        }
+    }
+    else if (mState.simCarrier == SimCarrier::SOFTBANK)
+    {
+        modemLog(ModemLogLevel::INF, "U128 : SOFTBANK SIM DETECTED.");
+        if (!setCarrier(LteCarrier::SOFTBANK))
         {
             modemLog(ModemLogLevel::ERR, "U128 : Failed to Set Carrier.");
             return false;
@@ -424,23 +491,138 @@ bool UartModemU128::setupCarrierBasedOnSim()
     else if (mState.simCarrier == SimCarrier::GLOBAL)
     {
         modemLog(ModemLogLevel::INF, "U128 : GLOBAL SIM DETECTED.");
-        if (carrierSW)
+        int simMode = 0;
+        int simSel = 0;
+        if (CocoboxConfigManager != nullptr)
         {
-            modemLog(ModemLogLevel::INF, "U128 : Set Carrier [DOCOMO]");
-            if (!setCarrier(LteCarrier::DOCOMO))
+            simMode = CocoboxConfigManager->getValueByAccessKey("SIMMODE");
+            simSel = CocoboxConfigManager->getValueByAccessKey("SIMSEL");
+        }
+
+        if (simMode == 3)
+        {
+            // 2.4 完全自動モード (SET_SIMMODE_3X) -> AT+COPS=0
+            int bandSel = 0;
+            if (CocoboxConfigManager != nullptr)
             {
-                modemLog(ModemLogLevel::ERR, "U128 : Failed to Set Carrier.");
+                bandSel = CocoboxConfigManager->getValueByAccessKey("BANDSEL");
+            }
+            const char* bandCfgStr = (bandSel == 1) ? LTE_BAND_AUTO_PB_PRI : LTE_BAND_AUTO_MB_PRI;
+
+            char cmd[96];
+            snprintf(cmd, sizeof(cmd), "AT+CBANDCFG=\"CAT-M\",%s", bandCfgStr);
+            queryU128(cmd, DEFAULT_TIMEOUT);
+
+            modemLog(ModemLogLevel::INF, "U128 : Set Carrier [FULL-AUTO] (SIMMODE=3, AT+COPS=0)");
+            if (queryU128("AT+COPS=0", 120000) != MODEM_RESULT::M_OK)
+            {
+                modemLog(ModemLogLevel::ERR, "U128 : Failed to Set Carrier [FULL-AUTO].");
                 return false;
+            }
+            vTaskDelay(pdMS_TO_TICKS(2000));
+        }
+        else if (simMode == 2)
+        {
+            // 2.2 設定一覧: 自動モード (SET_SIMMODE_2X)
+            int bandSel = 0;
+            if (CocoboxConfigManager != nullptr)
+            {
+                bandSel = CocoboxConfigManager->getValueByAccessKey("BANDSEL");
+            }
+            const char* bandCfgStr = (bandSel == 1) ? LTE_BAND_AUTO_PB_PRI : LTE_BAND_AUTO_MB_PRI;
+
+            char cmd[96];
+            snprintf(cmd, sizeof(cmd), "AT+CBANDCFG=\"CAT-M\",%s", bandCfgStr);
+            queryU128(cmd, DEFAULT_TIMEOUT);
+
+            if (simSel == 1)
+            {
+                modemLog(ModemLogLevel::INF, "U128 : Set Carrier [AUTO-SOFTBANK] (SIMMODE=2, SIMSEL=1)");
+                if (queryU128("AT+COPS=4,2,\"44020\",7", 120000) != MODEM_RESULT::M_OK)
+                {
+                    modemLog(ModemLogLevel::ERR, "U128 : Failed to Set Carrier [AUTO-SOFTBANK].");
+                    return false;
+                }
+            }
+            else
+            {
+                modemLog(ModemLogLevel::INF, "U128 : Set Carrier [AUTO-DOCOMO] (SIMMODE=2, SIMSEL=0)");
+                if (queryU128("AT+COPS=4,2,\"44010\",7", 120000) != MODEM_RESULT::M_OK)
+                {
+                    modemLog(ModemLogLevel::ERR, "U128 : Failed to Set Carrier [AUTO-DOCOMO].");
+                    return false;
+                }
+            }
+            vTaskDelay(pdMS_TO_TICKS(2000));
+        }
+        else if (simMode == 1)
+        {
+            // 2.2 設定一覧: リモート固定モード (SET_SIMMODE_1X)
+            if (simSel == 1)
+            {
+                modemLog(ModemLogLevel::INF, "U128 : Set Carrier [FIX-SOFTBANK] (SIMMODE=1, SIMSEL=1)");
+                if (!setCarrier(LteCarrier::SOFTBANK))
+                {
+                    modemLog(ModemLogLevel::ERR, "U128 : Failed to Set Carrier [FIX-SOFTBANK].");
+                    return false;
+                }
+            }
+            else
+            {
+                modemLog(ModemLogLevel::INF, "U128 : Set Carrier [FIX-DOCOMO] (SIMMODE=1, SIMSEL=0)");
+                if (!setCarrier(LteCarrier::DOCOMO))
+                {
+                    modemLog(ModemLogLevel::ERR, "U128 : Failed to Set Carrier [FIX-DOCOMO].");
+                    return false;
+                }
             }
         }
         else
         {
-            modemLog(ModemLogLevel::INF, "U128 : Set Carrier [SOFTBANK]");
-            if (!setCarrier(LteCarrier::SOFTBANK))
+            // 2.2 設定一覧: 手動モード (SET_SIMMODE_0X) -> DIPスイッチに従う
+#if ENABLE_DIP_SWITCH
+            if (carrierSW)
             {
-                modemLog(ModemLogLevel::ERR, "U128 : Failed to Set Carrier.");
-                return false;
+                // DIP2 = ON (1:上) -> SOFTBANK
+                modemLog(ModemLogLevel::INF, "U128 : Set Carrier [MANUAL-SOFTBANK] (SIMMODE=0, DIPSW=ON)");
+                if (!setCarrier(LteCarrier::SOFTBANK))
+                {
+                    modemLog(ModemLogLevel::ERR, "U128 : Failed to Set Carrier [MANUAL-SOFTBANK].");
+                    return false;
+                }
             }
+            else
+            {
+                // DIP2 = OFF (0:下) -> DOCOMO
+                modemLog(ModemLogLevel::INF, "U128 : Set Carrier [MANUAL-DOCOMO] (SIMMODE=0, DIPSW=OFF)");
+                if (!setCarrier(LteCarrier::DOCOMO))
+                {
+                    modemLog(ModemLogLevel::ERR, "U128 : Failed to Set Carrier [MANUAL-DOCOMO].");
+                    return false;
+                }
+            }
+#else
+            // DIPスイッチ非搭載時：MODE 0(SIMMODE=0)が読み込まれた場合はMODE 1 (FIXモード) にフォールバック
+            modemLog(ModemLogLevel::WAR, "U128 : MODE 0 selected but DIP switch is disabled. Falling back to FIX mode (SIMSEL).");
+            if (simSel == 1)
+            {
+                modemLog(ModemLogLevel::INF, "U128 : Set Carrier [FIX-SOFTBANK] (SIMMODE=0->1, SIMSEL=1)");
+                if (!setCarrier(LteCarrier::SOFTBANK))
+                {
+                    modemLog(ModemLogLevel::ERR, "U128 : Failed to Set Carrier [FIX-SOFTBANK].");
+                    return false;
+                }
+            }
+            else
+            {
+                modemLog(ModemLogLevel::INF, "U128 : Set Carrier [FIX-DOCOMO] (SIMMODE=0->1, SIMSEL=0)");
+                if (!setCarrier(LteCarrier::DOCOMO))
+                {
+                    modemLog(ModemLogLevel::ERR, "U128 : Failed to Set Carrier [FIX-DOCOMO].");
+                    return false;
+                }
+            }
+#endif
         }
     }
     else
@@ -461,60 +643,79 @@ bool UartModemU128::setCarrier(LteCarrier cr)
     MODEM_RESULT res2 = MODEM_RESULT::M_ERROR;
     char cmd[96];
 
-    modemLog(ModemLogLevel::INF, "U128 : Search Network");
-    res0 = queryU128("AT+COPS=?", 180000); // ネットワーク検索（利用可能な電波の調査）
-    modemLog(ModemLogLevel::INF, "U128 : Search Network...done");
-    // if (res0 != MODEM_RESULT::M_OK)
-    // {
-    //     modemLog(ModemLogLevel::ERR, "U128 : Failed to search network.(AT+COPS=?)");
-    //     return false;
-    // }
+    int bandSel = 0;
+    if (CocoboxConfigManager != nullptr)
+    {
+        bandSel = CocoboxConfigManager->getValueByAccessKey("BANDSEL");
+    }
 
     switch (cr)
     {
     case LteCarrier::AUTO:
-        modemLog(ModemLogLevel::INF, "U128 : Set Carrier to AUTO");
-        snprintf(cmd, sizeof(cmd), "AT+CBANDCFG=\"CAT-M\",%s", LTE_BAND_AUTO);
-        res1 = queryU128(cmd, DEFAULT_TIMEOUT);
-        res2 = queryU128("AT+COPS=0", 120000);
+        {
+            const char* bandStr = (bandSel == 1) ? LTE_BAND_AUTO_PB_PRI : LTE_BAND_AUTO_MB_PRI;
+            modemLog(ModemLogLevel::INF, "U128 : Set Carrier to AUTO (Preferred: DOCOMO, BandSel=%d)", bandSel);
+            snprintf(cmd, sizeof(cmd), "AT+CBANDCFG=\"CAT-M\",%s", bandStr);
+            res1 = queryU128(cmd, DEFAULT_TIMEOUT);
+            res2 = queryU128("AT+COPS=4,2,\"44010\",7", 120000);
+            if (res2 == MODEM_RESULT::M_OK)
+            {
+                modemLog(ModemLogLevel::INF, "U128 : Waiting 2000ms for network stabilization...");
+                vTaskDelay(pdMS_TO_TICKS(2000));
+            }
+        }
         break;
 
     case LteCarrier::DOCOMO:
-        if (platinumBandOnlySW)
         {
-            modemLog(ModemLogLevel::INF, "U128 : Set Carrier to DOCOMO (PB ONLY)");
-            snprintf(cmd, sizeof(cmd), "AT+CBANDCFG=\"CAT-M\",%s", LTE_BAND_DOCOMO_PB);
+            const char* bandStr = (bandSel == 1) ? LTE_BAND_DOCOMO_PB_PRI : LTE_BAND_DOCOMO_MB_PRI;
+            modemLog(ModemLogLevel::INF, "U128 : Set Carrier to DOCOMO (BandSel=%d)", bandSel);
+            snprintf(cmd, sizeof(cmd), "AT+CBANDCFG=\"CAT-M\",%s", bandStr);
+            res1 = queryU128(cmd, DEFAULT_TIMEOUT);
+            res2 = queryU128("AT+COPS=1,2,\"44010\",7", 120000);
         }
-        else
-        {
-            modemLog(ModemLogLevel::INF, "U128 : Set Carrier to DOCOMO");
-            snprintf(cmd, sizeof(cmd), "AT+CBANDCFG=\"CAT-M\",%s", LTE_BAND_DOCOMO);
-        }
-        res1 = queryU128(cmd, DEFAULT_TIMEOUT);
-        res2 = queryU128("AT+COPS=1,2,\"44010\",7", 120000);
         break;
 
     case LteCarrier::SOFTBANK:
-        if (platinumBandOnlySW)
         {
-            modemLog(ModemLogLevel::INF, "U128 : Set Carrier to SOFTBANK (PB ONLY)");
-            snprintf(cmd, sizeof(cmd), "AT+CBANDCFG=\"CAT-M\",%s", LTE_BAND_SB_PB);
+            const char* bandStr = (bandSel == 1) ? LTE_BAND_SB_PB_PRI : LTE_BAND_SB_MB_PRI;
+            modemLog(ModemLogLevel::INF, "U128 : Set Carrier to SOFTBANK (BandSel=%d)", bandSel);
+            snprintf(cmd, sizeof(cmd), "AT+CBANDCFG=\"CAT-M\",%s", bandStr);
+            res1 = queryU128(cmd, DEFAULT_TIMEOUT);
+            res2 = queryU128("AT+COPS=1,2,\"44020\",7", 120000);
         }
-        else
-        {
-            modemLog(ModemLogLevel::INF, "U128 : Set Carrier to SOFTBANK");
-            snprintf(cmd, sizeof(cmd), "AT+CBANDCFG=\"CAT-M\",%s", LTE_BAND_SB);
-        }
-        res1 = queryU128(cmd, DEFAULT_TIMEOUT);
-        res2 = queryU128("AT+COPS=1,2,\"44020\",7", 120000);
         break;
     }
 
-    return (res1 == MODEM_RESULT::M_OK && res2 == MODEM_RESULT::M_OK);
+    bool success = (res1 == MODEM_RESULT::M_OK && res2 == MODEM_RESULT::M_OK);
+    if (success)
+    {
+        modemLog(ModemLogLevel::INF, "U128 : Carrier switch completed. Waiting 3000ms for network stabilization...");
+        vTaskDelay(pdMS_TO_TICKS(3000));
+    }
+    return success;
 }
 
 bool UartModemU128::chkLteConnection()
 {
+    if (mState.isU128RDY)
+    {
+        modemLog(ModemLogLevel::WAR, "U128 : Modem reboot detected (isU128RDY is true). Re-initializing modem...");
+        this->wasModemReset = true;
+        if (this->init())
+        {
+            modemLog(ModemLogLevel::INF, "U128 : Modem re-initialization SUCCESS.");
+            this->isLteConnected = true;
+            return true;
+        }
+        else
+        {
+            modemLog(ModemLogLevel::ERR, "U128 : Modem re-initialization FAILED.");
+            this->isLteConnected = false;
+            return false;
+        }
+    }
+
     mState.LteStatus = -1; // 一度リセットする
     MODEM_RESULT result = queryU128("AT+CEREG?", DEFAULT_TIMEOUT);
     if (result != MODEM_RESULT::M_OK)
@@ -534,6 +735,11 @@ bool UartModemU128::chkLteConnection()
     else
     {
         modemLog(ModemLogLevel::WAR, "U128 : LTE NOT CONNECTED : MODE:%d", mState.LteStatus);
+        if (mState.LteStatus == 0)
+        {
+            modemLog(ModemLogLevel::INF, "U128 : GPRS detached (status 0). Sending AT+CGATT=1 to re-attach...");
+            queryU128("AT+CGATT=1", 10000);
+        }
         this->isLteConnected = false;
         return false;
     }
@@ -543,23 +749,101 @@ bool UartModemU128::chkLteConnection()
 bool UartModemU128::activatePdpConnection()
 {
     // 接続アクティブ化　※スロット0に設定が保存されている前提
-    modemLog(ModemLogLevel::INF, "U128 : Set Slot:0 Active.)");
-    if (queryU128("AT+CNACT=0,1", DEFAULT_TIMEOUT) != MODEM_RESULT::M_OK)
+    modemLog(ModemLogLevel::INF, "U128 : Set Slot:0 Active.");
+    
+    // AT+COPS直後などモデムのベアラー準備待ちのため最大3回リトライ
+    bool actOk = false;
+    for (int retry = 0; retry < 3; retry++)
     {
-        modemLog(ModemLogLevel::ERR, "U128 : Failed to set Slot:0.");
+        if (queryU128("AT+CNACT=0,1", DEFAULT_TIMEOUT) == MODEM_RESULT::M_OK)
+        {
+            actOk = true;
+            break;
+        }
+        modemLog(ModemLogLevel::WAR, "U128 : AT+CNACT=0,1 failed (attempt %d/3). Retrying in 1000ms...", retry + 1);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+
+    if (!actOk)
+    {
+        modemLog(ModemLogLevel::ERR, "U128 : Failed to set Slot:0 after retries.");
         mState.isPdpConnection = false;
         return false;
     }
 
+    // AT+CNACT=0,1 送信後、+APP PDP: 0,ACTIVE URC の受信または AT+CNACT? で IPアドレス取得を待機
+    uint32_t waitStart = millis();
+    const uint32_t pdpTimeoutMs = 15000; // 最大15秒待機
+    while (millis() - waitStart < pdpTimeoutMs)
+    {
+        if (chkPdpConnection() && mState.isPdpConnection)
+        {
+            modemLog(ModemLogLevel::INF, "U128 : Slot:0 Activated Successfully.");
+            return true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+
+    modemLog(ModemLogLevel::ERR, "U128 : Slot:0 Activation Timeout.");
+    mState.isPdpConnection = false;
+    return false;
+}
+
+// Slot0の非アクティブ化
+bool UartModemU128::deactivatePdpConnection()
+{
+    this->wasPdpReset = true; // Mark that a PDP reset was attempted/performed
+    modemLog(ModemLogLevel::INF, "U128 : Deactivating Slot:0.");
+    if (queryU128("AT+CNACT=0,0", DEFAULT_TIMEOUT) != MODEM_RESULT::M_OK)
+    {
+        modemLog(ModemLogLevel::ERR, "U128 : Failed to deactivate Slot:0.");
+        mState.isPdpConnection = false;
+        this->isPdpConnected = false;
+        return false;
+    }
+    mState.isPdpConnection = false;
+    this->isPdpConnected = false;
     return true;
 }
 
 // MQTTネットワーク接続の実装
 bool UartModemU128::connectMqttNetwork_internal()
 { 
-    if (queryU128("AT+SMCONN", MQTT_CONNECT_TIMEOUT) != MODEM_RESULT::M_OK)
+    // PDP接続の事前状態確認
+    if (!chkPdpConnection())
     {
-        modemLog(ModemLogLevel::ERR, "Failed to connect MQTT Network.");
+        modemLog(ModemLogLevel::WAR, "connectMqttNetwork_internal: PDP not active. Retrying activation...");
+        if (!activatePdpConnection())
+        {
+            modemLog(ModemLogLevel::ERR, "connectMqttNetwork_internal: PDP activation failed.");
+            return false;
+        }
+    }
+
+    // PDP確立直後の内部ソケットバッファ安定化のためのわずかな待ち時間
+    vTaskDelay(pdMS_TO_TICKS(500));
+
+    bool connOk = false;
+    for (int retry = 0; retry < 3; retry++)
+    {
+        if (queryU128("AT+SMCONN", MQTT_CONNECT_TIMEOUT) == MODEM_RESULT::M_OK)
+        {
+            connOk = true;
+            break;
+        }
+        modemLog(ModemLogLevel::WAR, "AT+SMCONN failed (attempt %d/3). Retrying in 1500ms...", retry + 1);
+        vTaskDelay(pdMS_TO_TICKS(1500));
+    }
+
+    if (!connOk)
+    {
+        modemLog(ModemLogLevel::ERR, "Failed to connect MQTT Network after retries.");
+        // MQTT失敗時にPDPが切れてしまっている場合のみ非アクティブ化を行う
+        if (!chkPdpConnection())
+        {
+            modemLog(ModemLogLevel::WAR, "PDP connection lost after MQTT failure. Deactivating Slot:0.");
+            deactivatePdpConnection();
+        }
         return false;
     }
 
@@ -578,44 +862,31 @@ size_t UartModemU128::receiveData(uint8_t *buffer, size_t max_len)
 // ----------------------------------------------------
 MODEM_RESULT UartModemU128::resisterMqttSub_internal()
 { 
-    // C++標準の std::string から、Arduinoの String に変更
+    // MQTT接続直後のモデムソケットバッファ安定化待ち
+    vTaskDelay(pdMS_TO_TICKS(1000));
+
     const char *sub_topic_prefix = "AT+SMSUB=\"BIoT/down/";
     const char *unsub_topic_prefix = "AT+SMUNSUB=\"BIoT/down/";
 
-    // String 型でフルコマンドを作成
     String subscribe_command = String(sub_topic_prefix) + mState.IMSI + "\",1";
     String unsubscribe_command = String(unsub_topic_prefix) + mState.IMSI + "\"";
 
-    // 1. 初回のSMSUB試行
-    modemLog(ModemLogLevel::MDBG2, "U128 : Attempting MQTT Subscribe.");
-    // subscribe_command は String 型なので、queryU128(const String& ...) に適合
-    if (queryU128(subscribe_command, 3000) == MODEM_RESULT::M_OK)
+    for (int retry = 1; retry <= 3; retry++)
     {
-        return MODEM_RESULT::M_OK; // 成功
+        modemLog(ModemLogLevel::INF, "U128 : Attempting MQTT Subscribe (Attempt %d/3): %s", retry, subscribe_command.c_str());
+        MODEM_RESULT subRes = queryU128(subscribe_command, 3000);
+        if (subRes == MODEM_RESULT::M_OK)
+        {
+            modemLog(ModemLogLevel::INF, "U128 : MQTT Subscribe SUCCESS.");
+            return MODEM_RESULT::M_OK;
+        }
+
+        modemLog(ModemLogLevel::WAR, "Failed to Set MQTT Subscriber (Attempt %d/3). Attempting UNSUB and retry.", retry);
+        queryU128(unsubscribe_command, 3000);
+        vTaskDelay(pdMS_TO_TICKS(1500));
     }
 
-    // 2. 購読失敗時の処理: エラーログを出力
-    modemLog(ModemLogLevel::ERR, "Failed to Set MQTT Subscriber (First attempt). Attempting UNSUB and retry.");
-
-    // 3. SMUNSUBを実行 (購読失敗時のクリーンアップ)
-    // unsubscribe_command は String 型なので、queryU128(const String& ...) に適合
-    if (queryU128(unsubscribe_command, 3000) != MODEM_RESULT::M_OK)
-    {
-        modemLog(ModemLogLevel::ERR, "Failed to UNSUB MQTT Subscriber (Critical Error). Aborting SUB.");
-        return MODEM_RESULT::M_ERROR; // UNUNSUBに失敗したら、重大なエラーとして終了
-    }
-
-    modemLog(ModemLogLevel::MDBG2, "U128 : UNSUB SUCCESSED. Retrying SUB after delay.");
-    // vTaskDelay(pdMS_TO_TICKS(5000)) の呼び出し（元のコードに合わせて残しています）
-
-    // 4. 2回目のSMSUB試行（再試行）
-    if (queryU128(subscribe_command, 3000) == MODEM_RESULT::M_OK)
-    {
-        return MODEM_RESULT::M_OK; // 2回目で成功
-    }
-
-    // 5. 2回目も失敗
-    modemLog(ModemLogLevel::ERR, "Failed to Set MQTT Subscriber (Second attempt). Aborting SUB.");
+    modemLog(ModemLogLevel::ERR, "Failed to Set MQTT Subscriber after all retries.");
     return MODEM_RESULT::M_ERROR;
 }
 
@@ -630,6 +901,14 @@ MODEM_RESULT UartModemU128::queryU128(const String &command, uint32_t timeoutMs)
 
     mState.atResult = MODEM_RESULT::M_TIMEOUT; // 結果を初期化
     mState.isQueryActive = true;
+
+    if (mState.echoDetected)
+    {
+        mState.echoDetected = false;
+        modemLog(ModemLogLevel::WAR, "U128 : Echo-back detected. Sending ATE0 to disable it.");
+        sendAtCommand("ATE0");
+        vTaskDelay(pdMS_TO_TICKS(100)); // コマンド処理待ちの短いディレイ
+    }
 
     // 3. コマンドの送信
     modemLog(ModemLogLevel::MDBG1, "SND>> : [%s]", command.c_str());
@@ -651,6 +930,22 @@ MODEM_RESULT UartModemU128::queryU128(const String &command, uint32_t timeoutMs)
     // Timeout処理
     modemLog(ModemLogLevel::ERR, "Command timeout after %u ms: %s", timeoutMs, command.c_str());
     finalResult = MODEM_RESULT::M_TIMEOUT;
+
+    // 同期崩壊およびコマンド入力モード(>)ハングを防ぐための復旧処理
+    _uart->write(0x1B); // ESC (0x1B) を送信してコマンド入力モードを強制キャンセル
+    vTaskDelay(pdMS_TO_TICKS(100)); // 応答やバッファ到着を待つためのディレイ
+
+    // 物理シリアルバッファの遅延データを破棄
+    while (_uart->available() > 0)
+    {
+        _uart->read();
+    }
+
+    // 生データハンドラタスクの受信待ちキューもクリアして遅延応答を完全に無視する
+    if (_rawReceiveQueue)
+    {
+        xQueueReset(_rawReceiveQueue);
+    }
 
 END_QUERY:
     mState.isQueryActive = false; // 応答待機フラグをクリア
@@ -682,23 +977,26 @@ modemDataPacket UartModemU128::processResponse(const String &response)
     }
     else if (response.indexOf("ERROR") != -1) // ERRORが含まれていたら
     {
-        // modemLog(ModemLogLevel::MDBG3, "U128 : RECEIVE ”ERROR”.");
         mState.atResult = MODEM_RESULT::M_ERROR;
     }
     else if (response.startsWith("+CEREG:")) // CEREG
     {
-        // modemLog(ModemLogLevel::MDBG3, "U128 : RECEIVE CEREG.");
         decodeCEREG(response);
     }
-    else if (response.startsWith("+SMSUB:")) // MQTTからの受信
+    else if (response.indexOf("+SMSUB") != -1) // MQTTからの受信
     {
-        // modemLog(ModemLogLevel::MDBG3, "U128 : RECEIVE MQTT SUBSCRIBE.");
+        modemLog(ModemLogLevel::INF, "U128 : RECEIVE MQTT SUBSCRIBE URC: %s", response.c_str());
         U128res = decodeMqttSub(response);
     }
     else if (response.startsWith("+APP PDP:")) // Slot:0をActiveにしたときのRES。（AT+CNACT=0,1)
     {
         // modemLog(ModemLogLevel::MDBG3, "U128 : RECEIVE APP CONNECTION ANSWER.");
-        decodeAPPconnection(response);
+        if (!decodeAPPconnection(response))
+        {
+            strcpy(U128res.type, "mqttState");
+            U128res.mqttstate = MqttConnectType::DISCONNECTED;
+            U128res.requiresExecution = true;
+        }
     }
     else if (response.startsWith("+CNACT:")) // Slot:0をActiveにしたときのRES。（AT+CNACT=0,1)
     {
@@ -824,6 +1122,10 @@ modemDataPacket UartModemU128::processResponse(const String &response)
     else if (response.startsWith("+COPS:"))
     {
         modemLog(ModemLogLevel::MDBG2, "U128 : NETWORK OPERATOR INFO : %s", response.c_str());
+    }
+    else if (response.startsWith("AT") || response.startsWith("at"))
+    {
+        mState.echoDetected = true;
     }
     else
     {
@@ -1023,7 +1325,83 @@ char *UartModemU128::chkSystemInformation_internal()
     }
 }
 
+String UartModemU128::getSimStateInformation()
+{
+    // モデムから最新の系統情報(CPSI)を取得
+    chkSystemInformation();
+
+    int simMode = 0;
+    int simSel = 0;
+    int bandSel = 0;
+    if (CocoboxConfigManager != nullptr)
+    {
+        simMode = CocoboxConfigManager->getValueByAccessKey("SIMMODE");
+        simSel = CocoboxConfigManager->getValueByAccessKey("SIMSEL");
+        bandSel = CocoboxConfigManager->getValueByAccessKey("BANDSEL");
+    }
+
+    // キャリア名の判定 (mccMnc: 44010 -> DOCOMO, 44020 -> SOFTBANK)
+    String carrierStr = "UNKNOWN";
+    if (mState.cpsiState.mccMnc == 44010)
+    {
+        carrierStr = "DOCOMO";
+    }
+    else if (mState.cpsiState.mccMnc == 44020)
+    {
+        carrierStr = "SOFTBANK";
+    }
+    else if (mState.cpsiState.mccMnc == 44050 || mState.cpsiState.mccMnc == 44070)
+    {
+        carrierStr = "KDDI";
+    }
+    else if (mState.cpsiState.mccMnc > 0)
+    {
+        carrierStr = String(mState.cpsiState.mccMnc);
+    }
+
+    // バンド名の整形 (例: band=1 -> "B1")
+    String bandStr = "UNKNOWN";
+    if (mState.cpsiState.band > 0)
+    {
+        bandStr = "B" + String(mState.cpsiState.band);
+    }
+
+    // 要求フォーマット: SIMMODE=0,SIMSEL=0,BANDSEL=0,CARRIER=DOCOMO,BAND=B1
+    String result = "SIMMODE=" + String(simMode) +
+                    ",SIMSEL=" + String(simSel) +
+                    ",BANDSEL=" + String(bandSel) +
+                    ",CARRIER=" + carrierStr +
+                    ",BAND=" + bandStr;
+
+    return result;
+}
+
 /////Decorder////
+static String hexToAsciiString(const String &hexInput)
+{
+    if (hexInput.length() == 0 || hexInput.length() % 2 != 0)
+    {
+        return hexInput;
+    }
+    for (size_t i = 0; i < hexInput.length(); i++)
+    {
+        char c = hexInput.charAt(i);
+        if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f')))
+        {
+            return hexInput;
+        }
+    }
+    String asciiResult = "";
+    asciiResult.reserve(hexInput.length() / 2);
+    for (size_t i = 0; i < hexInput.length(); i += 2)
+    {
+        String byteStr = hexInput.substring(i, i + 2);
+        char byteVal = (char)strtol(byteStr.c_str(), NULL, 16);
+        asciiResult += byteVal;
+    }
+    return asciiResult;
+}
+
 // Jsonデータのパース
 bool UartModemU128::parseJsonPayload(const String &jsonPayload, modemDataPacket &packet)
 {
@@ -1052,8 +1430,9 @@ bool UartModemU128::parseJsonPayload(const String &jsonPayload, modemDataPacket 
     String imsiString = doc["imsi"].as<String>();
     setString2Char(packet.imsi, imsiString, sizeof(packet.imsi));
 
-    // 3. message の格納
+    // 3. message の格納 (HEXエンコード時は自動デコード)
     String messageString = doc["msg"].as<String>();
+    messageString = hexToAsciiString(messageString);
     setString2Char(packet.message, messageString, sizeof(packet.message));
 
     // 4. cclk の格納
@@ -1164,12 +1543,21 @@ bool UartModemU128::decodeAPPconnection(const String &Response)
     {
         modemLog(ModemLogLevel::INF, "U128 : PDP CONNECTION OK: %s", Response.c_str());
         mState.isPdpConnection = true;
+        this->isPdpConnected = true;
         return true;
     }
     else
     {
         modemLog(ModemLogLevel::ERR, "U128 : PDP CONNECTION FAIL : %s", Response.c_str());
-        mState.isPdpConnection = false;
+        if (pdpIndex == 0)
+        {
+            mState.isPdpConnection = false;
+            if (this->isPdpConnected)
+            {
+                this->isPdpConnected = false;
+                this->wasPdpReset = true;
+            }
+        }
         return false;
     }
 }
@@ -1455,8 +1843,14 @@ bool UartModemU128::decodeCEREG(const String &response)
     int firstComma = response.indexOf(',', currentPos);
     if (firstComma == -1)
     {
-        modemLog(ModemLogLevel::ERR, "decodeCEREG : Could not find first comma (Missing <n>).");
-        return false;
+        // カンマが無い場合（非同期通知 URC の '+CEREG: <stat>' の形式）
+        String stat_str = response.substring(currentPos);
+        stat_str.trim();
+        int stat_val = stat_str.toInt();
+        
+        mState.LteStatus = stat_val;
+        // modemLog(ModemLogLevel::MDBG2, "U128 : CEREG Status (URC) : [%d].", mState.LteStatus);
+        return true;
     }
 
     // <n> の値 (通常 0, 1, 2) を抽出
@@ -1534,11 +1928,13 @@ bool UartModemU128::decodeCNACT(const String &response)
     if (secondComma == -1)
     {
         modemLog(ModemLogLevel::ERR, "decodeCNACT : Coud not find comma.");
+        mState.isPdpConnection = false;
         return false; // 2番目のカンマが見つからない
     }
     if (response.charAt(firstComma + 1) != '1' || secondComma != firstComma + 2)
     {
         modemLog(ModemLogLevel::ERR, "decodeCNACT : Slot:0 not activated.");
+        mState.isPdpConnection = false;
         return false; // 状態が '1' ではないため、エラーとみなしスキップ
     }
 
@@ -1548,6 +1944,7 @@ bool UartModemU128::decodeCNACT(const String &response)
     if (ipStart == -1)
     {
         modemLog(ModemLogLevel::ERR, "decodeCNACT : could not find IP-Address.");
+        mState.isPdpConnection = false;
         return false; // 開始のダブルクォートが見つからない
     }
     int ipEnd = response.indexOf('"', ipStart + 1);
@@ -1555,8 +1952,10 @@ bool UartModemU128::decodeCNACT(const String &response)
     {
         mState.IPAddress = response.substring(ipStart + 1, ipEnd);
         modemLog(ModemLogLevel::INF, "U128 : IP-Address Found : [%s].", mState.IPAddress.c_str());
+        mState.isPdpConnection = true;
         return true;
     }
+    mState.isPdpConnection = false;
     return false; // 終了のダブルクォートが見つからない
 }
 
@@ -1617,26 +2016,39 @@ bool UartModemU128::requestTimecode(void)
 // 旧FreeSpace電文の送信
 bool UartModemU128::sendFsMessage(const String &message)
 {
-    // 受け取ったメッセージを16進数ASCIIに変換
-    String hexMessage = "";
-    for (int i = 0; i < message.length(); i++)
+    int hexMode = 1; // デフォルトはON (HEX変換)
+    if (CocoboxConfigManager != nullptr)
     {
-        // 各文字のASCII値を16進数に変換
-        char hexBuffer[3]; // 2桁の16進数とヌル終端文字のためのバッファ
-        sprintf(hexBuffer, "%02X", message.charAt(i));
-
-        // 変換結果を結合
-        hexMessage += hexBuffer;
+        int val = CocoboxConfigManager->getValueByAccessKey("HEXMODE");
+        if (val != -1)
+        {
+            hexMode = val;
+        }
     }
-    // もしHEX変換いらなければ将来ここはなくすかも
+
+    String msgPayload;
+    if (hexMode != 0)
+    {
+        // 受け取ったメッセージを16進数ASCIIに変換
+        for (int i = 0; i < message.length(); i++)
+        {
+            char hexBuffer[3];
+            sprintf(hexBuffer, "%02X", message.charAt(i));
+            msgPayload += hexBuffer;
+        }
+    }
+    else
+    {
+        // HEXMODE=0 (OFF) の場合はメッセージをそのまま使用
+        msgPayload = message;
+    }
 
     // JSONペイロードの構築
     JsonDocument doc; // メモリを確保 (ArduinoJson v7)
 
     doc["type"] = "fs";
     doc["imsi"] = mState.IMSI;
-    // doc["msg"] = message;
-    doc["msg"] = hexMessage;
+    doc["msg"]  = msgPayload;
 
     String plainPayload;
     serializeJson(doc, plainPayload); // JSON文字列に変換
@@ -1739,6 +2151,99 @@ void UartModemU128::setPlatinumBandSW(bool sw)
 {
     this->platinumBandOnlySW = sw;
     modemLog(ModemLogLevel::INF, "PlatinumBandOnlySW set to: %s", sw ? "TRUE" : "FALSE");
+}
+
+void UartModemU128::ModemDisconnectTest(int flg)
+{
+    modemLog(ModemLogLevel::WAR, "[TEST] ModemDisconnectTest called with flg = %d", flg);
+    switch (flg)
+    {
+    case 0:
+        // 復旧用コマンド
+        modemLog(ModemLogLevel::INF, "[TEST] Restoring network connection (AT+CGATT=1)...");
+        queryU128("AT+CGATT=1", 10000);
+        break;
+    case 1:
+        // ソフトウェア的なモック URC の注入
+        modemLog(ModemLogLevel::INF, "[TEST] Injecting mock +SMSTATE: 0 URC...");
+        {
+            modemDataPacket mockPkt = {};
+            strcpy(mockPkt.type, "mqttState");
+            mockPkt.mqttstate = MqttConnectType::DISCONNECTED;
+            mockPkt.requiresExecution = true;
+            if (_urcQueue)
+            {
+                xQueueSend(_urcQueue, &mockPkt, 0);
+            }
+        }
+        break;
+    case 2:
+        // PDPコンテキスト切断のシミュレート (AT+CNACT=0,0)
+        modemLog(ModemLogLevel::INF, "[TEST] Simulating PDP disconnect (AT+CNACT=0,0)...");
+        queryU128("AT+CNACT=0,0", 10000);
+        break;
+    case 3:
+        // キャリア回線切断のシミュレート (AT+CGATT=0)
+        modemLog(ModemLogLevel::INF, "[TEST] Simulating Carrier disconnect (AT+CGATT=0)...");
+        queryU128("AT+CGATT=0", 10000);
+        break;
+    case 4:
+        // モデム自律再起動のシミュレート (AT+CFUN=1,1)
+        modemLog(ModemLogLevel::INF, "[TEST] Simulating Modem Reset (AT+CFUN=1,1)...");
+        queryU128("AT+CFUN=1,1", 10000);
+        break;
+    default:
+        modemLog(ModemLogLevel::WAR, "[TEST] Unknown test pattern flg = %d", flg);
+        break;
+    }
+}
+
+bool UartModemU128::isGlobalSim() const
+{
+    return mState.simCarrier == SimCarrier::GLOBAL;
+}
+
+String UartModemU128::getSimCarrierString() const
+{
+    if (mState.simCarrier == SimCarrier::GLOBAL)
+    {
+        int simMode = 0;
+        int simSel = 0;
+        if (CocoboxConfigManager != nullptr)
+        {
+            simMode = CocoboxConfigManager->getValueByAccessKey("SIMMODE");
+            simSel = CocoboxConfigManager->getValueByAccessKey("SIMSEL");
+        }
+
+        if (simMode == 3)
+        {
+            return "GAUTO_A";
+        }
+        else if (simMode == 2)
+        {
+            return (simSel == 1) ? "GAUTO_S" : "GAUTO_D";
+        }
+        else if (simMode == 1)
+        {
+            return (simSel == 1) ? "GFIX_S" : "GFIX_D";
+        }
+        else
+        {
+            return carrierSW ? "GMAN_D" : "GMAN_S";
+        }
+    }
+
+    switch (mState.simCarrier)
+    {
+    case SimCarrier::DOCOMO:
+        return "DOCOMO";
+    case SimCarrier::SOFTBANK:
+        return "SBANK";
+    case SimCarrier::KDDI:
+        return "KDDI";
+    default:
+        return "UNKNOWN";
+    }
 }
 
 /////////////

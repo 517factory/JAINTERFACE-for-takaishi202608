@@ -29,7 +29,10 @@ void LEDCont::ledTask(void *parameter)
         case LEDMode::ON_Delay: // 一定時間つけたい場合
             led->setPinState(LED_ON);
             cbx_wait(ON_D_TIME);
-            led->setMode(LEDMode::OFF);
+            if (led->mode == LEDMode::ON_Delay)
+            {
+                led->setMode(LEDMode::OFF);
+            }
             break;
         case LEDMode::BLINK_SLOW:
             digitalWrite(led->pin, LED_ON);

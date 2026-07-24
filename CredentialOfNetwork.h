@@ -8,9 +8,12 @@
 // #define PREFERRED_CARRIER "44010" // 優先キャリア : Docomo
 #define PREFERRED_CARRIER "44020" // 優先キャリア : Softba
 
-#define LTE_BAND_AUTO "1,3,8,19,28"
-#define LTE_BAND_DOCOMO "1,3,19,28"
-#define LTE_BAND_DOCOMO_PB "19,28" //プラチナバンドONLY
-#define LTE_BAND_SB "1,3,8,28"
-#define LTE_BAND_SB_PB "8,28" //プラチナバンドONLY
+#define LTE_BAND_AUTO_MB_PRI "1,3,8,19,28"
+#define LTE_BAND_AUTO_PB_PRI "19,8,28,1,3"
+
+#define LTE_BAND_DOCOMO_MB_PRI "1,3,19,28"
+#define LTE_BAND_DOCOMO_PB_PRI "19,28,1,3"
+
+#define LTE_BAND_SB_MB_PRI "1,3,8,28"
+#define LTE_BAND_SB_PB_PRI "8,28,1,3"
 #define MQTT_BROKER "beam.soracom.io"

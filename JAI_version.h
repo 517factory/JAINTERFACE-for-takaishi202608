@@ -4,6 +4,13 @@
 
 /*
 -Version履歴（ｖ1.XXまでの履歴は過去バージョン参照）
+        - ver1.11a 2026/07/24
+                - sketch_CocoBox3FW_v254i の通信・共通モジュールの移植
+                - シリアルコマンド受信用サブシステム (SerialCommand) の追加
+                - DIPスイッチ非搭載基板対応 (ENABLE_DIP_SWITCH マクロ追加)
+                - SIMMODE=0 設定時の MODE 1 (FIXモード) への自動フォールバックとログ出力対応
+                - decodeConfigSetting / LTE_SET コマンド解析および SIMMODE 変更時のモデム再設定シーケンスの対応
+
         - ver1.10a 2026/04/14
                 - MQTT化
 

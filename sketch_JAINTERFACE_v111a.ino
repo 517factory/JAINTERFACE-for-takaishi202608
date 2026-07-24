@@ -4,6 +4,7 @@
 #include "JAI_SwitchEventHandler.hpp"
 #include "LEDCont.h"
 #include "NVSManager.hpp"
+#include "SerialCommand.hpp"
 #include "UartModemU128.hpp"
 #include "driver/rtc_io.h"
 #include "esp_sleep.h"
@@ -22,7 +23,7 @@ void pollSendCallback(TimerHandle_t xTimer);
 void JAONSendCallback(TimerHandle_t xTimer);
 void TimeCodeMaskCallback(TimerHandle_t xTimer);
 void usb_power(bool flg);
-void cbx_restart();
+void cbx_restart(BootReason NewReason = BootReason::NORMAL_BOOT);
 void requestServerTime();
 void ResetJAmode();
 void taskCreate();
@@ -110,6 +111,7 @@ TaskHandle_t timecodeUpdateHdl = NULL;
 
 // BatChecker *oBatChecker = nullptr;
 DataCommESP32 oDataComm;
+SerialCommand *serialCmd = nullptr;
 
 LEDCont *oLED_JA = nullptr;
 LEDCont *oLED_Com = nullptr;
@@ -129,6 +131,7 @@ SwitchEventHandler *JA08_hdl = nullptr;
 TimeCode timecode;
 NVSManager nvs;
 ConfigManager config;
+ConfigManager *CocoboxConfigManager = nullptr;
 
 volatile bool dataInFlg = false; // 受信通知 (legacy)
 CocoBoxControlCode executedCode = CocoBoxControlCode::LTE_NODATA;
@@ -244,13 +247,41 @@ void timecodeUpdateTask(void *pvParameters) {
   }
 }
 
+void serialCommandCallback(const char *cmd) {
+  String command = String(cmd);
+  command.trim();
+  command.toLowerCase();
+
+  if (executeSerialCommand(command)) return;
+
+  String upperCmd = command;
+  upperCmd.toUpperCase();
+  std::vector<CocoBoxControlCommands> commands = oDataComm.ChkRcvData(upperCmd.c_str());
+  for (const auto &cmdObj : commands) {
+    CocoBoxControlCode code = cmdObj.code;
+    if (code != CocoBoxControlCode::LTE_UNKNOWN) {
+      if (code == CocoBoxControlCode::LTE_SET) {
+        strncpy(last_received_setcmd, upperCmd.c_str(), sizeof(last_received_setcmd) - 1);
+      }
+      xQueueSend(cbx3ControlQueue, &code, 0);
+    }
+  }
+}
+
 //  コマンド制御タスク
 void controlCocoboxTask(void *pvParameters) {
   CocoBoxControlCode command;
 
   while (true) {
+    // シリアルコマンド受信用処理
+    QueueHandle_t serialQ = SerialCommand::getQueue();
+    char serialCmdMsg[65] = {0};
+    if (serialQ != nullptr && xQueueReceive(serialQ, serialCmdMsg, 0) == pdTRUE) {
+      serialCommandCallback(serialCmdMsg);
+    }
+
     // キューからデータを受け取る
-    if (xQueueReceive(cbx3ControlQueue, &command, portMAX_DELAY) == pdPASS) {
+    if (xQueueReceive(cbx3ControlQueue, &command, pdMS_TO_TICKS(100)) == pdPASS) {
       controlCocoboxCallback(command); // コールバックへ送る
     }
 
@@ -355,6 +386,33 @@ void controlCocoboxCallback(CocoBoxControlCode command) {
       } else if (configSet.command == "TCUPDATE") {
         SendDataLogMsg("SET TimeCodeUpdate to " +
                        String(config.getValue("tcupdate")) + "[day(s)]");
+      } else if (configSet.command == "SIMMODE" || configSet.command == "SIMSEL" || configSet.command == "BANDSEL") {
+        cbx3_log(LOG_INF, "Set Config Change %s = %d", configSet.command.c_str(), configSet.value);
+        if (modem != nullptr) {
+          bool isSkipped = false;
+          if (!modem->isGlobalSim() && (configSet.command == "SIMMODE" || configSet.command == "SIMSEL")) {
+            cbx3_log(LOG_INF, "Non-Global SIM detected (%s). Carrier switch sequence skipped for %s.", modem->getSimCarrierString().c_str(), configSet.command.c_str());
+            isSkipped = true;
+          } else {
+            JAIState.isModemReady = false;
+            LedController();
+
+            if (modem->setupCarrierBasedOnSim()) {
+              cbx3_log(LOG_INF, "Modem carrier setup updated for %s (%s). Reconnecting network...", configSet.command.c_str(), modem->getSimCarrierString().c_str());
+              modem->connectNetwork();
+            } else {
+              cbx3_log(LOG_ERR, "Failed to update modem carrier setup for %s.", configSet.command.c_str());
+            }
+          }
+
+          if (isSkipped) {
+            SendDataLogMsg("Set Config Change Skipped (Non-Global SIM) : " + String(configSet.command.c_str()) + " = " + String(configSet.value));
+          } else {
+            SendDataLogMsg("Set Config Change Success : " + String(configSet.command.c_str()) + " = " + String(configSet.value));
+          }
+        } else {
+          SendDataLogMsg("Set Config Change Success : " + String(configSet.command.c_str()) + " = " + String(configSet.value));
+        }
       }
     } else {
       cbx3_log(LOG_ERR,
@@ -393,7 +451,7 @@ void controlCocoboxCallback(CocoBoxControlCode command) {
 // タイマーコールバック関数
 void JAONSendCallback(TimerHandle_t xTimer) {
   // サーバーにデータ送信
-  SendDataCommon(JAON);
+  SendDataCommon(CommandType::JAON);
 }
 
 // JAmodeリセット
@@ -855,9 +913,9 @@ void SendDataLogMsg(String msg) {
 //   MODE"); cbx_wait(100); // PINの安定待ち esp_deep_sleep_start();
 // }
 
-void cbx_restart() // リセット用
+void cbx_restart(BootReason NewReason) // リセット用
 {
-  cbx3_log(LOG_INF, "RESTART JAI(AFTER 30s)");
+  cbx3_log(LOG_INF, "RESTART JAI(AFTER 30s) Reason: %d", static_cast<int>(NewReason));
   SendDataLogMsg("RESTART JAI (AFTER 30s)");
   oLED_Pwr->setMode(LEDMode::BLINK_FAST);
   cbx_wait(5 * 1000); // 5sec
@@ -1052,6 +1110,7 @@ void PowerOnModemDevice() {
 
 // SetUp////////////////////////////////////////////////////////////////////////////////
 void setup() {
+  CocoboxConfigManager = &config;
   Serial.begin(115200);
   cbx_wait(1000);
   cbx3_log(LOG_INF,
@@ -1076,6 +1135,9 @@ void setup() {
     cbx3_log(LOG_INF, "[ST0]->>NVS Config loaded.");
     config.printAllConfigValues();
   }
+
+  // シリアルコマンド受信用オブジェクト初期化
+  serialCmd = new SerialCommand();
 
   // タスクとデバイスの初期化
   taskCreate();

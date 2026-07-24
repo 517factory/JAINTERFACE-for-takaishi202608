@@ -1,14 +1,15 @@
 #pragma once
 #include <WiFi.h>
 #include <WebServer.h>
-#include "SPIFFS.h"
 #include <ESPmDNS.h>
 #include <ArduinoJson.h>
+#include <LittleFS.h>
 #include "header.h"
 #include "Debug.h"
 
 /**
  *  ESP32-S3 Wifi-Server(SoftAP) for cocobox3
+ *  LittleFS版
  *
  *  517Factory
  * */
@@ -29,23 +30,23 @@ private:
     const char *hostname = "cocobox";                     // host name
     const int channel = 10;                               // WiFiChannell
     WebServer server;
-    void startMDNS(); // startup mDNS
-    void stopMDNS();  // stop mDNS
+    fs::FS &filesystem; // 参照としてLittleFSインスタンスを保持
+    void startMDNS();   // startup mDNS
+    void stopMDNS();    // stop mDNS
     char *wifiRcvd;
     bool rcvdFlg;
     bool serverActive;
     StatusUpdateCallback onStatusUpdate; // コールバック関数ポインタ
     LockCallback onLock;                 // LOCK操作用コールバック
     LockCallback onUnlock;               // UNLOCK操作用コールバック
-    bool sendSPIFFSFile(const char* path, const char* contentType);
-    void sendJsonResponse(int code, const char* status, const char* message) ;
-    void handleStaticFile(const char* path, const char* contentType);
+    bool sendLittleFSFile(const char *path, const char *contentType);
+    void sendJsonResponse(int code, const char *status, const char *message);
+    void handleStaticFile(const char *path, const char *contentType);
     String convertToJSON(const StatusData &status);
 
 public:
-    cbxWiFi();
+    explicit cbxWiFi(fs::FS &fs_instance);
     ~cbxWiFi();
-    void initSPIFS(); // initialize SPIFS
     void startWifi();
     void stopWifi();
     void startServer();
@@ -56,7 +57,6 @@ public:
     char *getMessage();
     bool isMessage();
     StatusData status;
-    void handleStatus();
     void setStatusUpdateCallback(StatusUpdateCallback callback); // StatusUpdateコールバック設定
     void setLockCallback(LockCallback lockCallback);             // 施錠用コールバック設定
     void setUnlockCallback(LockCallback unlockCallback);         // 解錠用コールバック設定

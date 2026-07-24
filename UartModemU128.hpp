@@ -33,6 +33,7 @@ enum class SimCarrier : int
 const int DEFAULT_TIMEOUT = 10000;
 const int COPS_TIMEOUT = 120000; // 最大120秒必要
 const int MQTT_CONNECT_TIMEOUT = 30000;
+const int MAX_NET_RETRY_COUNT = 3; // テスト用に3に設定（元は10）。テスト後に元に戻すこと。
 
 // Modemステータス構造体
 struct ModemStatus
@@ -46,6 +47,7 @@ struct ModemStatus
   volatile MqttConnectType mqttConnectType = MqttConnectType::UNKNOWN;
   volatile bool commandInputMode = false;
   volatile int echoMode = -1;
+  volatile bool echoDetected = false;                       // エコーバック検知フラグ
   volatile bool isQueryActive = false;                      // 問い合わせ実行中フラグ
   volatile MODEM_RESULT atResult = MODEM_RESULT::M_UNKNOWN; // ATコマンドの成功ステータス
   volatile int RSSIValue = 0;                               // 最後に取得したRSSI値
@@ -67,6 +69,7 @@ public:
   // コンストラクタ
   UartModemU128(HardwareSerial *uart, uint16_t sendQueueLength = 30);
   ModemStatus mState;
+  String getSimCarrierString() const override;
   bool carrierSW = true;
   bool platinumBandOnlySW = false;
 
@@ -79,8 +82,12 @@ public:
   MODEM_RESULT resisterMqttSub() override;                          // MQTT SUB登録
   bool requestTimecode(void);
   char *chkSystemInformation(void) override;
+  String getSimStateInformation(void) override;
   void setCarrierSW(bool sw) override;
   void setPlatinumBandSW(bool sw) override;
+  bool setupCarrierBasedOnSim() override;
+  bool isGlobalSim() const override;
+  void ModemDisconnectTest(int flg) override;
 
   // デストラクタ
   ~UartModemU128() override
@@ -105,6 +112,7 @@ private:
   MODEM_RESULT chkMqtt_internal();
   char *chkSystemInformation_internal();
   bool activatePdpConnection() override;
+  bool deactivatePdpConnection() override;
   size_t receiveData(uint8_t *buffer, size_t max_len) override;     // データの受信
   CpsiState_t chkSignal() override;                                 // 信号の確認（RSSI）
   modemDataPacket processResponse(const String &response) override; // 応答した電文の処理
@@ -130,7 +138,6 @@ private:
   const char *getOperationModeString(CpsiOperationMode_t mode);
   void printCPSI(const CpsiState_t &state);
   bool setCarrier(LteCarrier cr);
-  bool setupCarrierBasedOnSim();
   SimCarrier chkSimCarrier(String IMSI);
 };
 

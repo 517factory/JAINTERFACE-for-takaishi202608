@@ -40,7 +40,7 @@ class LEDCont
 {
 private:
   int pin;
-  LEDMode mode;
+  volatile LEDMode mode;
   TaskHandle_t taskHandle;
   static void ledTask(void *parameter);
 

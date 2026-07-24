@@ -11,6 +11,8 @@
           ┗ WiFiModem ---　WiFi接続用のインターフェース（未実装）
 */
 
+#pragma once
+
 // ATコマンドアクセス時の共通戻り値定義
 enum class MODEM_RESULT : int
 {
@@ -154,6 +156,7 @@ public:
   virtual bool InitialModemSetup() = 0; // 初回のみ使う（モデムに設定を書き込む）
   virtual bool connectMqttNetwork() = 0;
   virtual char *chkSystemInformation(void) = 0;
+  virtual String getSimStateInformation(void) = 0;
   virtual ModemType getType() const = 0;
   virtual RawDataItem_t readRawData() = 0;
   virtual bool requestTimecode() = 0;
@@ -162,6 +165,9 @@ public:
   virtual MODEM_RESULT resisterMqttSub() = 0;
   virtual void setCarrierSW(bool sw) { (void)sw; }
   virtual void setPlatinumBandSW(bool sw) { (void)sw; } // プラチナバンド固定スイッチ用
+  virtual bool setupCarrierBasedOnSim() { return false; }
+  virtual bool isGlobalSim() const { return false; }
+  virtual String getSimCarrierString() const { return "UNKNOWN"; }
 
   // コールバックとタスク管理
   virtual void setDebugLogCallback(void (*callback)(ModemLogLevel level, const char* msg)) = 0;
@@ -176,6 +182,13 @@ public:
   // データ送信キューイング
   virtual bool enqueueSendMessage(const char *msg, uint32_t timeout_ms = 0) = 0;
   virtual uint16_t getSendQueueWaitingCount() = 0;
+  virtual bool wasPdpResetPerformed() = 0;
+  virtual void clearPdpResetFlag() = 0;
+  virtual bool wasModemResetPerformed() = 0;
+  virtual void clearModemResetFlag() = 0;
+
+  // テスト用：切断状態のシミュレーション
+  virtual void ModemDisconnectTest(int flg) = 0;
 
   // セマフォ（排他制御）
   virtual bool lockModem(uint32_t ticksToWait = 0xFFFFFFFF) = 0; // portMAX_DELAYの代替として0xFFFFFFFF

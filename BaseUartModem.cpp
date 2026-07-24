@@ -21,7 +21,7 @@ BaseUartModem::BaseUartModem(HardwareSerial *uart, uint16_t sendQueueLength, uin
     {
         // キュー作成失敗時
         cbx3_log(LOG_ERR, "FATAL: Failed to create FreeRTOS Queues!");
-        cbx_sleep("FATAL: Failed to create FreeRTOS Queues!");
+        cbx_restart(BootReason::QUEUE_FAIL);
     }
 }
 
@@ -29,7 +29,7 @@ bool BaseUartModem::connectNetwork()
 {
     // return true; // バイパスTEST
 
-    cbx3_log(LogLevel::MDBG3, "↓↓↓↓↓↓↓↓↓↓↓CHECK CONNECTION↓↓↓↓↓↓↓↓↓↓");
+    cbx3_log(MDBG3, "↓↓↓↓↓↓↓↓↓↓↓CHECK CONNECTION↓↓↓↓↓↓↓↓↓↓");
     // LTE接続確認(CEREG)
     if (!this->chkLteConnection())
     {
@@ -57,10 +57,17 @@ bool BaseUartModem::connectNetwork()
         if (this->isPdpConnected) // 接続→未接続に変わった時
         {
             this->isPdpConnected = false;
+            this->wasPdpReset = true;
             // SendDataLogMsg("PDP DISCONNECTED.");
         }
-        this->activatePdpConnection(); //
-        return false;                  // 一旦falseを返す。
+        if (this->activatePdpConnection())
+        {
+            this->isPdpConnected = true;
+        }
+        else
+        {
+            return false;
+        }
     }
     else
     {
@@ -76,12 +83,16 @@ bool BaseUartModem::connectNetwork()
     // cbx3_log(MDBG3, "CHECK MQTT CONNECTION.[%d]", (int)result);
     if (result != MODEM_RESULT::M_OK)
     {
-        this->connectMqttNetwork(); // 再接続処理  ERROR処理TODO
+        if (this->connectMqttNetwork())
+        {
+            cbx3_log(LOG_INF, "MQTT Connected successfully inside connectNetwork.");
+            return true;
+        }
         return false;
     }
     // ここでのtrueは問い合わせの成功のみ。接続の成功ではない。
     // ここでは問い合わせのみ行う。結果に対する処理はURCから行う（URCでも通知が来る場合があるため）
-    cbx3_log(LogLevel::MDBG3, "↑↑↑↑↑↑↑↑↑↑↑CHECK CONNECTION↑↑↑↑↑↑↑↑↑↑");
+    cbx3_log(MDBG3, "↑↑↑↑↑↑↑↑↑↑↑CHECK CONNECTION↑↑↑↑↑↑↑↑↑↑");
     return true;
 }
 
@@ -98,12 +109,12 @@ bool BaseUartModem::checkNetwork()
     // cbx3_log(MDBG3, "CHECK MQTT CONNECTION.[%d]", (int)result);
     if (result == MODEM_RESULT::M_OK)
     {
-        cbx3_log(LogLevel::MDBG3, "MQTT:OK");
+        cbx3_log(MDBG3, "MQTT:OK");
         return true;
     }
     else
     {
-        cbx3_log(LogLevel::MDBG3, "MQTT:FAIL");
+        cbx3_log(MDBG3, "MQTT:FAIL");
         return false;
     }
 }
@@ -182,9 +193,14 @@ String BaseUartModem::cleanSegment(const String &raw_response)
 // CRでつながっているRAWメッセージをCR分割し、各メッセージをQueueに流す
 void BaseUartModem::splitAndQueueMessage(const RawDataItem_t &item)
 {
-    // ※RawDataは断片化していないものとして処理する。
-    String processed_response = cleanSegment(String(item.data, item.len)); // きれいにしたデータ（CRとLFを$に変換済）
-    // cbx3_log(LOG_INF, "RAW RESPONCE: [%s]", processed_response.c_str());
+    String incoming = String(item.data, item.len);
+    if (_pendingPartialLine.length() > 0)
+    {
+        incoming = _pendingPartialLine + incoming;
+        _pendingPartialLine = "";
+    }
+
+    String processed_response = cleanSegment(incoming);
 
     if (processed_response.length() == 0)
     {
@@ -202,22 +218,21 @@ void BaseUartModem::splitAndQueueMessage(const RawDataItem_t &item)
         {
             // プロンプトの場合、後の分割処理に乗せるため、デリミタ($)を付加して通常処理へ
             processed_response += "$";
-            // cbx3_log(LOG_INF, "PROMPT: Added $ to end of prompt for parsing.");
         }
         else
         {
-            // 終端デリミタなし、かつプロンプトでもない -> 不完全な電文として扱う
-            int len_to_discard = processed_response.length() - start_index;
-
-            cbx3_log(LOG_ERR, "PARTIAL: Incomplete line at end: [%s]. Discarding %d bytes.",
-                     processed_response.substring(processed_response.length() - 10).c_str(), // 最後の10文字程度を表示
-                     len_to_discard);
-
-            // 処理を継続すると不完全な電文が次の行としてキューに入るため、
-            // 末尾の不完全な部分を処理対象から外すために文字列を切り詰める
-            processed_response = processed_response.substring(0, processed_response.length() - len_to_discard);
-
-            // ※ 注: 本来は次回のために保存(_pendingPartialLine)すべきですが、今回の指示(警告・破棄)に従います。
+            // 終端デリミタなし -> 次回のデータ受信時まで末尾の未完成行を保持する
+            int lastDollar = processed_response.lastIndexOf('$');
+            if (lastDollar != -1)
+            {
+                _pendingPartialLine = processed_response.substring(lastDollar + 1);
+                processed_response = processed_response.substring(0, lastDollar + 1);
+            }
+            else
+            {
+                _pendingPartialLine = processed_response;
+                return;
+            }
         }
     }
 
@@ -229,7 +244,7 @@ void BaseUartModem::splitAndQueueMessage(const RawDataItem_t &item)
         String trimmed_line = segment;
         if (!trimmed_line.isEmpty()) // 分割した電文をQueに送る
         {
-            cbx3_log(LogLevel::MDBG1, "RCV>> : [%s]", trimmed_line.c_str());
+            cbx3_log(MDBG1, "RCV>> : [%s]", trimmed_line.c_str());
             modemDataPacket pkt = this->processResponse(trimmed_line); // 電文ごとに処理してmodemDataPacket構造体に格納
 
             if (pkt.requiresExecution) // 実行要求があったら次のQueueに送る
@@ -296,23 +311,28 @@ void BaseUartModem::modemMonitorTaskWrapper(void *pvParameters)
     while (true)
     {
         vTaskDelay(pdMS_TO_TICKS(MODEM_RECHECK_DELAY_MS_DEFAULT)); // 監視間隔
-        if (instance->lockModem(portMAX_DELAY))
+        
+        while (true)
         {
-            while (true)
+            bool isConnected = false;
+            if (instance->lockModem(portMAX_DELAY))
             {
-                if (instance->checkNetwork())
-                {
-                    break; // 正常なら抜ける
-                }
-                else // 切断時
-                {
-                    if (instance->_mqttStateCallback) {
-                        instance->_mqttStateCallback(MqttConnectType::DISCONNECTED);
-                    }
-                    // _mqttStateCallback内で再接続が完了するまでブロックされる想定
-                }
+                isConnected = instance->checkNetwork();
+                instance->unlockModem();
             }
-            instance->unlockModem();
+            
+            if (isConnected)
+            {
+                break; // 正常なら抜ける
+            }
+            else // 切断時
+            {
+                if (instance->_mqttStateCallback) {
+                    instance->_mqttStateCallback(MqttConnectType::DISCONNECTED);
+                }
+                // _mqttStateCallback内で再接続が完了するまでブロックされる想定。
+                // 呼び出し中はMutexを解放しているため、別タスクでのURC受信処理が稼働できます。
+            }
         }
     }
 }
@@ -385,10 +405,18 @@ void BaseUartModem::sendTaskWrapper(void *pvParameters)
                 if (xQueueSendToFront(instance->_sendQueue, &data, 0) != pdPASS)
                 {
                     delete[] data;
-                    if (instance->_mqttStateCallback) {
-                        instance->_mqttStateCallback(MqttConnectType::DISCONNECTED);
-                    }
                 }
+                
+                // コールバックを呼ぶ前に必ずMutexを解放する（connectNetwork()呼び出し等でデッドロックするのを防ぐ）
+                instance->unlockModem();
+
+                // 送信失敗したその瞬間の正確なタイムコードで切断ログをキューイングするため、即座にコールバックを実行する
+                if (instance->_mqttStateCallback) {
+                    instance->_mqttStateCallback(MqttConnectType::DISCONNECTED);
+                }
+
+                vTaskDelay(pdMS_TO_TICKS(5000)); // 失敗時は5秒待機して他タスクの割り込み枠を作る
+                continue;
             }
             instance->unlockModem();
         }
@@ -507,4 +535,24 @@ void BaseUartModem::setString2Char(char *dest, const String &src, size_t destSiz
     if (destSize == 0) return;
     strncpy(dest, src.c_str(), destSize - 1);
     dest[destSize - 1] = '\0';
+}
+
+bool BaseUartModem::wasPdpResetPerformed()
+{
+    return wasPdpReset;
+}
+
+void BaseUartModem::clearPdpResetFlag()
+{
+    wasPdpReset = false;
+}
+
+bool BaseUartModem::wasModemResetPerformed()
+{
+    return wasModemReset;
+}
+
+void BaseUartModem::clearModemResetFlag()
+{
+    wasModemReset = false;
 }

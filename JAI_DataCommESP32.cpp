@@ -198,47 +198,47 @@ std::vector<CocoBoxControlCommands> DataCommESP32::ChkRcvData(const char *buff)
     {
         if (lines[i].indexOf(RCV_COMMAND_JRST) != -1)
         {
-            results.push_back({LTE_JRST, lines[i]});
+            results.push_back(CocoBoxControlCommands{LTE_JRST, lines[i]});
         }
         else if (lines[i].indexOf(RCV_COMMAND_CHECK) != -1)
         {
-            results.push_back({LTE_CHECK, lines[i]});
+            results.push_back(CocoBoxControlCommands{LTE_CHECK, lines[i]});
         }
         else if (lines[i].indexOf(RCV_COMMAND_MODEMSTATE) != -1)
         {
-            results.push_back({LTE_MODEMSTATE, lines[i]});
+            results.push_back(CocoBoxControlCommands{LTE_MODEMSTATE, lines[i]});
         }
         else if (lines[i].indexOf(RCV_COMMAND_RESET) != -1)
         {
-            results.push_back({LTE_RESET, lines[i]});
+            results.push_back(CocoBoxControlCommands{LTE_RESET, lines[i]});
         }
         else if (lines[i].indexOf(RCV_COMMAND_SET) != -1)
         {
-            results.push_back({LTE_SET, lines[i]});
+            results.push_back(CocoBoxControlCommands{LTE_SET, lines[i]});
         }
         else if (lines[i].substring(0, 2) == RCV_ANSWERBACK)
         {
-            results.push_back({LTE_ANSWERBACK, lines[i]});
+            results.push_back(CocoBoxControlCommands{LTE_ANSWERBACK, lines[i]});
         }
         else if (lines[i].indexOf("+CCLK:") != -1)
         {
-            results.push_back({LTE_GPSTIME, lines[i]});
+            results.push_back(CocoBoxControlCommands{LTE_GPSTIME, lines[i]});
         }
         else if (lines[i].indexOf(RCV_SERVERTIME) != -1)
         {
-            results.push_back({LTE_SERVERTIME, lines[i]});
+            results.push_back(CocoBoxControlCommands{LTE_SERVERTIME, lines[i]});
         }
         else if (lines[i].indexOf(RCV_OK) != -1)
         {
-            results.push_back({LTE_OK, lines[i]});
+            results.push_back(CocoBoxControlCommands{LTE_OK, lines[i]});
         }
         else if (lines[i].indexOf(RCV_ERROR) != -1)
         {
-            results.push_back({LTE_ERROR, lines[i]});
+            results.push_back(CocoBoxControlCommands{LTE_ERROR, lines[i]});
         }
         else
         {
-            results.push_back({LTE_UNKNOWN, lines[i]});
+            results.push_back(CocoBoxControlCommands{LTE_UNKNOWN, lines[i]});
         }
     }
     return results;
@@ -319,9 +319,17 @@ configSetting DataCommESP32::decodeConfigSetting(const char *buff)
         if (configSetting.command == "POLL" ||
             configSetting.command == "TCUPDATE" ||
             configSetting.command == "AUTOLOCK" ||
-            configSetting.command == "VTH" ||
             configSetting.command == "VCALP" ||
-            configSetting.command == "VCALM")
+            configSetting.command == "VCALM" ||
+            configSetting.command == "EQTYPE" ||
+            configSetting.command == "EQBT" ||
+            configSetting.command == "EQCT" ||
+            configSetting.command == "EQINT" ||
+            configSetting.command == "EQARST" ||
+            configSetting.command == "SIMMODE" ||
+            configSetting.command == "SIMSEL" ||
+            configSetting.command == "BANDSEL" ||
+            configSetting.command == "HEXMODE")
         {
             return configSetting;
         }

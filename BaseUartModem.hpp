@@ -20,6 +20,10 @@ protected:
   bool _isInitialized = false; // 初期化されたかどうかのフラグ
   bool isLteConnected = false;
   bool isPdpConnected = false;
+  bool wasPdpReset = false;
+  bool wasModemReset = false;
+  uint32_t connectionFailureCount = 0; // 連続接続失敗回数
+  bool useFallbackBand = false;        // フォールバック用バンド設定を使用中かどうか
 
   // 共通通信プライベートメソッド (BaseUartModem.cppで実装)
   // bool sendCommand(const String &cmd, const String &expected_resp, uint32_t timeout_ms = 0);
@@ -31,6 +35,7 @@ protected:
   QueueHandle_t _sendQueue = nullptr; // 送信用キュー
   QueueHandle_t _rawReceiveQueue = nullptr; // 生データ受信用キュー
   SemaphoreHandle_t _modemSemaphore = nullptr; // モデム排他制御用セマフォ
+  String _pendingPartialLine = ""; // 受信バッファ分割時の不完全行の保留用バッファ
 
   TaskHandle_t _modemMonitorTask_hdl = nullptr;
   TaskHandle_t _sendTask_hdl = nullptr;
@@ -78,6 +83,11 @@ public:
   // データ送信キューイング
   bool enqueueSendMessage(const char *msg, uint32_t timeout_ms = 0) override;
   uint16_t getSendQueueWaitingCount() override;
+  bool wasPdpResetPerformed() override;
+  void clearPdpResetFlag() override;
+  bool wasModemResetPerformed() override;
+  void clearModemResetFlag() override;
+  void ModemDisconnectTest(int flg) override = 0;
 
   RawDataItem_t readRawData();                                     // 生データの読み込み
   void splitAndQueueMessage(const RawDataItem_t &item);            // 電文を分轄してQueueに送る
@@ -89,6 +99,7 @@ public:
   bool InitialModemSetup() override = 0; // Modemの初期設定をしてセーブする（初回起動時のみ使うもの）
   bool connectMqttNetwork() override = 0;
   char *chkSystemInformation(void) override = 0;
+  String getSimStateInformation(void) override = 0;
   virtual MODEM_RESULT chkMqtt() = 0;
   // virtual bool connectMqtt() = 0;
   bool checkNetwork();
@@ -99,6 +110,7 @@ protected:
   virtual bool chkLteConnection() = 0;
   virtual bool chkPdpConnection() = 0;
   virtual bool activatePdpConnection() = 0;
+  virtual bool deactivatePdpConnection() = 0;
   virtual size_t receiveData(uint8_t *buffer, size_t max_len) = 0;
   virtual CpsiState_t chkSignal() = 0;
   virtual modemDataPacket processResponse(const String &response) = 0;
