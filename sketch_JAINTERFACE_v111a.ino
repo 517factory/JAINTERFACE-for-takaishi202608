@@ -158,7 +158,7 @@ void modemLogCallback(ModemLogLevel level, const char *message) {
 
 bool modemMqttStateCallback(MqttConnectType type) {
   cbx3_log(LOG_INF, "MQTT State Changed: %d", (int)type);
-  return true;
+  return mqttConnectHandler(type);
 }
 
 void modemTxLedCallback() {
