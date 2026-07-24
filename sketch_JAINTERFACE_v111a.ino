@@ -933,6 +933,7 @@ void SendDataLogMsg(String msg) {
 void cbx_restart(BootReason NewReason) // リセット用
 {
   cbx3_log(LOG_INF, "RESTART JAI(AFTER 30s) Reason: %d", static_cast<int>(NewReason));
+  config.setValueByAccessKey("BTRSN", static_cast<int>(NewReason));
   SendDataLogMsg("RESTART JAI (AFTER 30s)");
   oLED_Pwr->setMode(LEDMode::BLINK_FAST);
   cbx_wait(5 * 1000); // 5sec
@@ -1183,6 +1184,45 @@ void setup() {
   start_msg += ",TCUD=";
   start_msg += String(config.getValue("tcupdate"));
   SendDataLogMsg(start_msg);
+
+  // BootReasonの取得と表示・送信
+  cbx3_log(LOG_INF, "[ST0]->>SENDING BOOT MSG");
+  int bootReason = config.getValue("BootReason");
+  cbx3_log(LOG_INF, "[ST0]->>BOOT REASON : %d", bootReason);
+  String boot_reason_msg = "BOOT REASON : ";
+  switch (bootReason)
+  {
+  case static_cast<int>(BootReason::NORMAL_BOOT):
+    boot_reason_msg += "NORMAL BOOT : ";
+    break;
+  case static_cast<int>(BootReason::REMOTE_REBOOT):
+    boot_reason_msg += "REMOTE REBOOT: ";
+    break;
+  case static_cast<int>(BootReason::NET_CONNECT_FAIL):
+    boot_reason_msg += "NET CONNECT FAIL: ";
+    break;
+  case static_cast<int>(BootReason::LITTLEFS_FAIL):
+    boot_reason_msg += "LITTLEFS FAIL: ";
+    break;
+  case static_cast<int>(BootReason::MODEM_SETUP):
+    boot_reason_msg += "MODEM_SETUP: ";
+    break;
+  case static_cast<int>(BootReason::UART_FAIL):
+    boot_reason_msg += "UART FAIL: ";
+    break;
+  case static_cast<int>(BootReason::QUEUE_FAIL):
+    boot_reason_msg += "QUEUE FAIL: ";
+    break;
+  case static_cast<int>(BootReason::NVS_FAIL):
+    boot_reason_msg += "NVS FAIL: ";
+    break;
+  default:
+    boot_reason_msg += "UNKNOWN REASON: ";
+    break;
+  }
+  boot_reason_msg += String(config.getValue("BootReason"));
+  SendDataLogMsg(boot_reason_msg);
+  config.setValueByAccessKey("BTRSN", static_cast<int>(BootReason::NORMAL_BOOT)); // 表示・送信したらNORMAL BOOT(0)に戻す
 
   // タイムコード更新タスク開始
   cbx3_log(LOG_INF, "[ST0]->>STARTING TIMECODE-UPDATE TASK");

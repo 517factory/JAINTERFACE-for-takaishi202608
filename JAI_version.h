@@ -12,7 +12,9 @@
                 - decodeConfigSetting / LTE_SET コマンド解析および SIMMODE 変更時のモデム再設定シーケンスの対応
                 - モデムコマンド応答失敗・プロンプトタイムアウト時のESCキャンセルおよび切断ステート(DISCONNECTED)更新処理の追加
                 - 切断検知時のネットワーク再接続リトライおよびリトライ超過時の自動再起動(cbx_restart)機能の追加 (COCOBOX FWと同等化)
-                - 切断・復帰時の LedController() 呼び出しを追加 (切断時のオレンジLED高速点滅対応)
+                - 切断・復帰時の LedController() 呼び出しおよびコールバック(modemMqttStateCallback)連携修正 (切断時のオレンジLED高速点滅対応)
+                - モデム接続成功時の mqttConnectType=CONNECTED フラグ更新を追加 (未送信メッセージのスタック・無限ループ防止)
+                - NVSへの BootReason 保存および起動時の BOOT REASON ログ記録・サーバー送信機能の追加 (COCOBOX FWと同等化)
 
         - ver1.10a 2026/04/14
                 - MQTT化

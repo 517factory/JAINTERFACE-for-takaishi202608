@@ -284,6 +284,7 @@ bool UartModemU128::init_internal()
     // }
 
     modemLog(ModemLogLevel::INF, "U128 : MQTT Connection and Subscribe SUCCESS.");
+    mState.mqttConnectType = MqttConnectType::CONNECTED;
     return true;
 }
 
@@ -847,6 +848,7 @@ bool UartModemU128::connectMqttNetwork_internal()
         return false;
     }
 
+    mState.mqttConnectType = MqttConnectType::CONNECTED;
     vTaskDelay(pdMS_TO_TICKS(5000)); // 長めのディレイをいれておかないと、初回のSUBが時間がかかる？未確認（TODO）
     return true;
 }
