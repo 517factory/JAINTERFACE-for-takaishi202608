@@ -1,0 +1,18 @@
+# Arduino / PlatformIO / Binary build artifacts
+binary/
+build/
+*.bin
+*.elf
+*.hex
+
+# Reference repositories / Nested Git directories
+cocobox_ref/
+
+# Log files
+*.log
+errorlog.txt
+
+# OS / Editor temporary files
+.DS_Store
+Thumbs.db
+

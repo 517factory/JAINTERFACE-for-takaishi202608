@@ -1,0 +1,97 @@
+body {
+  font-family: sans-serif;
+  display: flex;
+  flex-direction: column;
+  align-items: center; /* 水平方向中央揃え */
+  justify-content: center; /* 垂直方向中央揃え */
+  min-height: 100vh; /* 画面全体に広がる */
+  margin: 0;
+  background-color: #f4f4f4; /* 背景色 */
+}
+
+.container {
+  background-color: white;
+  padding: 20px;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1); /* 影 */
+  text-align: center; /* コンテンツを中央揃え */
+}
+
+h1 {
+  color: #333; /* タイトル色 */
+  margin-bottom: 20px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 20px;
+}
+
+th, td {
+  padding: 10px;
+  border: 1px solid #ddd;
+  text-align: left;
+}
+
+th {
+  background-color: #f0f0f0;
+  font-weight: bold;
+}
+
+.loading {
+  color: #999;
+  font-style: italic;
+}
+
+.error {
+  color: #d32f2f; /* 赤色 */
+  margin-top: 10px;
+}
+
+.message {
+  margin-top: 10px;
+  font-weight: bold;
+}
+
+.success {
+  color: #4caf50; /* 緑色 */
+}
+
+.controls {
+  display: flex;
+  flex-direction: row;
+  gap: 10px;
+  justify-content: center; /* 中央揃え */
+}
+
+#reloadButton {
+  background-color: #007bff; /* 青色 */
+}
+
+#lockButton {
+  background-color: #dc3545; /* 赤色 */
+}
+
+#unlockButton {
+  background-color: #4CAF50; /* 緑色 */
+}
+
+.controls button {
+  width: 100px; /* ボタンの幅を揃える */
+}
+
+button {
+  padding: 10px 20px;
+  font-size: 16px;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  background-color: #007bff; /* 青色 */
+  color: white;
+  transition: background-color 0.3s;
+}
+
+button:hover {
+  background-color: #0056b3; /* より濃い青色 */
+}

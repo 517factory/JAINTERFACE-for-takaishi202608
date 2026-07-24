@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cocobox Log</title>
+  </head>
+  <body>
+    <h1>Cocobox Log</h1>
+    <div id="log"></div>
+    <script>
+      // WebSocketを開始
+      var socket = new WebSocket("ws://" + window.location.hostname + ":81/");
+
+      // WebSocketのイベントハンドラー
+      socket.onmessage = function (event) {
+        // ログを受信したときに実行される処理
+        var logDiv = document.getElementById("log");
+        logDiv.innerHTML += "<p>" + event.data + "</p>";
+      };
+    </script>
+  </body>
+</html>
