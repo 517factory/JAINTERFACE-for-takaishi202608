@@ -2,6 +2,6 @@
     "configuration": "JTAGAdapter=default,PSRAM=disabled,FlashMode=qio,FlashSize=8M,LoopCore=1,EventsCore=1,USBMode=hwcdc,CDCOnBoot=default,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,PartitionScheme=default,CPUFreq=240,UploadSpeed=921600,DebugLevel=none,EraseFlash=none,ZigbeeMode=default",
     "board": "esp32:esp32:esp32s3",
     "port": "COM5",
-    "sketch": "sketch_JAINTERFACE_v111a.ino",
+    "sketch": "sketch_JAINTERFACE_v111c.ino",
     "output": "D:\\temp\\arduino-build"
 }

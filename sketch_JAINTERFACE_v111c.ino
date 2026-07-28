@@ -1111,8 +1111,15 @@ void setupModem() {
     cbx3_log(LOG_INF, "[ST1]-->>Modem Init SUCCESS.");
     JAIState.isModemReady = true;
   } else {
-    cbx3_log(LOG_ERR, "[ST1]-->>MODEM INIT FAIL");
-    cbx_restart();
+    cbx3_log(LOG_WAR, "[ST1]-->>Modem Init FAILED.");
+    cbx3_log(LOG_INF, "[ST1]-->>Entering Modem Setup Mode.");
+    if (modem->InitialModemSetup()) {
+      cbx3_log(LOG_INF, "[ST1]-->>Modem Setup finished.Reboot.");
+      cbx_restart(BootReason::MODEM_SETUP);
+    } else {
+      cbx3_log(LOG_ERR, "[ST1]-->>FATAL ERROR : Modem Setup failed.");
+      cbx_restart(BootReason::MODEM_SETUP);
+    }
   }
 }
 

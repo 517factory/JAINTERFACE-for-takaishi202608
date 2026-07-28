@@ -1,12 +1,14 @@
 
 // ファームウエアバージョン、シリアルモニターログに表示される
-#define FW_VER "1.11b"
+#define FW_VER "1.11c"
 
 /*
 -Version履歴（ｖ1.XXまでの履歴は過去バージョン参照）
+        - ver1.11c 2026/07/28
+                - モデム初期化失敗時(modem->init() FAIL)にモデム初期設定モード(InitialModemSetup)を実行するよう修正 (COCOBOX FWと同等化)
+
         - ver1.11b 2026/07/25
                 - SIMSTATE コマンド対応 (getSimStateInformation / checkSimStatus)
-                - v1.11bバージョン作成
 
         - ver1.11a 2026/07/24
                 - sketch_CocoBox3FW_v254i の通信・共通モジュールの移植
