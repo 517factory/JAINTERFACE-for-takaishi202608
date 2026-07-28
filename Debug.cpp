@@ -613,12 +613,37 @@ void readLogFile(const String& fileName)
     {
         checkAndRotateLogFile();
         flushLogBuffer();
-        if (LittleFS.exists(fileName))
+        
+        String targetPath = fileName;
+        if (!LittleFS.exists(targetPath))
         {
-            File f = LittleFS.open(fileName, "r");
+            File root = LittleFS.open("/", "r");
+            if (root)
+            {
+                File f = root.openNextFile();
+                while (f)
+                {
+                    String entryName = f.name();
+                    if (!entryName.startsWith("/")) entryName = "/" + entryName;
+                    if (entryName.equalsIgnoreCase(targetPath))
+                    {
+                        targetPath = entryName;
+                        f.close();
+                        break;
+                    }
+                    f.close();
+                    f = root.openNextFile();
+                }
+                root.close();
+            }
+        }
+
+        if (LittleFS.exists(targetPath))
+        {
+            File f = LittleFS.open(targetPath, "r");
             if (f)
             {
-                SerialDebug.printf("--- START OF FILE: %s (%d bytes) ---\n", fileName.c_str(), f.size());
+                SerialDebug.printf("--- START OF FILE: %s (%d bytes) ---\n", targetPath.c_str(), f.size());
                 char readBuf[128];
                 while (f.available() > 0)
                 {
@@ -626,12 +651,12 @@ void readLogFile(const String& fileName)
                     SerialDebug.write((uint8_t*)readBuf, bytesRead);
                     vTaskDelay(pdMS_TO_TICKS(5));
                 }
-                SerialDebug.printf("\n--- END OF FILE: %s ---\n", fileName.c_str());
+                SerialDebug.printf("\n--- END OF FILE: %s ---\n", targetPath.c_str());
                 f.close();
             }
             else
             {
-                SerialDebug.printf("Failed to open file: %s\n", fileName.c_str());
+                SerialDebug.printf("Failed to open file: %s\n", targetPath.c_str());
             }
         }
         else
@@ -790,13 +815,37 @@ bool executeSerialCommand(const String& cmd)
         
         if (fileLogMutex != NULL && xSemaphoreTake(fileLogMutex, portMAX_DELAY) == pdTRUE)
         {
-            if (LittleFS.exists(fileName))
+            String targetPath = fileName;
+            if (!LittleFS.exists(targetPath))
             {
-                if (LittleFS.remove(fileName))
+                File root = LittleFS.open("/", "r");
+                if (root)
                 {
-                    SerialDebug.printf("  Deleted: %s\n", fileName.c_str());
+                    File f = root.openNextFile();
+                    while (f)
+                    {
+                        String entryName = f.name();
+                        if (!entryName.startsWith("/")) entryName = "/" + entryName;
+                        if (entryName.equalsIgnoreCase(targetPath))
+                        {
+                            targetPath = entryName;
+                            f.close();
+                            break;
+                        }
+                        f.close();
+                        f = root.openNextFile();
+                    }
+                    root.close();
+                }
+            }
+
+            if (LittleFS.exists(targetPath))
+            {
+                if (LittleFS.remove(targetPath))
+                {
+                    SerialDebug.printf("  Deleted: %s\n", targetPath.c_str());
                     // 削除したファイルが現在書き込み中のログファイルの場合、パス情報を初期化
-                    if (fileName.equalsIgnoreCase(currentLogPath))
+                    if (targetPath.equalsIgnoreCase(currentLogPath))
                     {
                         currentLogPath[0] = '\0';
                         lastLogIndex = -2;
@@ -805,7 +854,7 @@ bool executeSerialCommand(const String& cmd)
                 }
                 else
                 {
-                    SerialDebug.printf("  Failed to delete: %s\n", fileName.c_str());
+                    SerialDebug.printf("  Failed to delete: %s\n", targetPath.c_str());
                     ret = false;
                 }
             }
@@ -947,24 +996,11 @@ void cbx3_file_log_init(void)
     }
 }
 
-// void cbx3_file_log_start_loop(void)
-// {
-//     loopStartTimeMs = millis();
-//     loopStarted = true;
-    
-//     // if (serialCmdTaskHandle == NULL)
-//     // {
-//     //     xTaskCreatePinnedToCore(
-//     //         serialCmdTask,
-//     //         "serialCmdTask",
-//     //         8192,
-//     //         NULL,
-//     //         1,
-//     //         &serialCmdTaskHandle,
-//     //         APP_CPU_NUM
-//     //     );
-//     // }
-// }
+void cbx3_file_log_start_loop(void)
+{
+    loopStartTimeMs = millis();
+    loopStarted = true;
+}
 
 void cbx3_file_log_flush(void)
 {

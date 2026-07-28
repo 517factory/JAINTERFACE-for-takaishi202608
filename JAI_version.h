@@ -1,9 +1,16 @@
 
 // ファームウエアバージョン、シリアルモニターログに表示される
-#define FW_VER "1.11c"
+#define FW_VER "1.11d"
 
 /*
 -Version履歴（ｖ1.XXまでの履歴は過去バージョン参照）
+        - ver1.11d 2026/07/29
+                - ログバグ修正 (COCOBOX FWと同等化)
+                - cbx3_file_log_start_loop() の有効化（コメントアウト解除）
+                - readLogFile / logdel コマンドでの LittleFS パス大文字・小文字不一致対策ロジック移植
+                - setup() 内に LittleFS マウント処理および cbx3_file_log_init(), cbx3_file_log_start_loop() 呼び出しを追加
+                - cbx3_file_log_start_loop() の呼び出しを setup() の最後に移動（起動時の未同期Startログのリネームが正しく動作するよう修正）
+
         - ver1.11c 2026/07/28
                 - モデム初期化失敗時(modem->init() FAIL)にモデム初期設定モード(InitialModemSetup)を実行するよう修正 (COCOBOX FWと同等化)
 

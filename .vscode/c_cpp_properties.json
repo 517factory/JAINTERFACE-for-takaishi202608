@@ -28,7 +28,7 @@
             ],
             "intelliSenseMode": "gcc-x64",
             "includePath": [
-                "x:\\07-03_DEV3\\bitpark\\JA-INTERFACE\\sketch_JAINTERFACE_v111c",
+                "x:\\07-03_DEV3\\bitpark\\JA-INTERFACE\\sketch_JAINTERFACE_v111d",
                 "C:\\Users\\n517f\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32s3-libs\\3.3.11\\qio_qspi\\include",
                 "C:\\Users\\n517f\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.11\\cores\\esp32",
                 "C:\\Users\\n517f\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.11\\variants\\esp32s3",

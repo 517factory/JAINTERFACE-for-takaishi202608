@@ -12,10 +12,12 @@
 #include "timecode.hpp"
 #include <HardwareSerial.h>
 #include <SPIFFS.h>
+#include <LittleFS.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
 // Forward Declarations
+void DispLittleFSfiles();
 void LedController();
 void SendDataLogMsg(String message);
 void SendDataCommon(CommandType cmd_type);
@@ -1144,6 +1146,32 @@ void setup() {
   CocoboxConfigManager = &config;
   Serial.begin(115200);
   cbx_wait(1000);
+
+  // LittleFSのマウント
+  cbx3_log(LOG_INF, "[ST0]->>Initializing LittleFS");
+  if (!LittleFS.begin(false))
+  {
+    cbx3_log(LOG_WAR, "[ST0]-->>LittleFS Mount Failed!");
+    cbx3_log(LOG_INF, "[ST0]-->>Attempting to format LittleFS.");
+    if (LittleFS.begin(true))
+    { // true: フォーマットを試みる
+      cbx3_log(LOG_INF, "[ST0]-->>LittleFS formatted successfully.");
+    }
+    else
+    {
+      cbx3_log(LOG_ERR, "[ST0]-->>LittleFS mount and format failed. Restarting...");
+      cbx_restart(BootReason::LITTLEFS_FAIL); // 再起動して再度試す
+      return;
+    }
+  }
+  cbx3_log(LOG_INF, "[ST0]-->>LittleFS Mounted successfully.");
+
+  // --- LittleFS内のファイルリストを表示 (デバッグ用) ---
+  DispLittleFSfiles();
+
+  // ログ機能の初期化をここで実行（これ以降のsetupログをすべて記録するため）
+  cbx3_file_log_init();
+
   cbx3_log(LOG_INF,
            "///////////STARTING J-ALART INTERFACE/////////////////////");
   cbx3_log(LOG_INF, "FW Ver : %s", FW_VER);
@@ -1254,6 +1282,9 @@ void setup() {
   LedController();
 
   cbx3_log(LOG_INF, "[ST0]->>ALL SETUP FINISHED. J-ALART INTERFACE RUNNING.");
+
+  // メイン処理開始に伴いログローテーション用のループを開始
+  cbx3_file_log_start_loop();
 }
 
 // loop////////////////////////////////////////////////////////////////////////////////
@@ -1330,3 +1361,31 @@ bool checkSimStatus() {
     }
   }
 }
+
+// LittleFSの中のファイルリスト表示
+void DispLittleFSfiles()
+{
+  cbx3_log(LOG_INF, "--- Listing LittleFS directory ---");
+  File root_dir_list = LittleFS.open("/");
+  if (!root_dir_list)
+  {
+    cbx3_log(LOG_INF, "Failed to open root directory for listing.");
+  }
+  else
+  {
+    File file_item = root_dir_list.openNextFile();
+    while (file_item)
+    {
+      if (file_item.isDirectory())
+      {
+        cbx3_log(LOG_INF, "  DIR : %s", file_item.name());
+      }
+      else
+      {
+        cbx3_log(LOG_INF, "  FILE: %s (Size: %u bytes)", file_item.name(), file_item.size());
+      }
+      file_item = root_dir_list.openNextFile();
+    }
+  }
+}
+
